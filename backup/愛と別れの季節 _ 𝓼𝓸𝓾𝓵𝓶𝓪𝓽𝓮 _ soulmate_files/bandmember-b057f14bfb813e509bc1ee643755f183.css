@@ -1,0 +1,412 @@
+/* trackpipe/public/css/label/add_item_dialog.css */
+.label-add-item-dialog label {
+    display: block;
+    margin-bottom: 1em;
+}
+
+.label-add-item-dialog label + label {
+    margin-top: 1em;
+    display: inline;
+}
+
+.label-add-item-dialog label > .label {
+    margin-left: 3ex;
+    display: inline;
+}
+
+.label-add-item-dialog input[type="radio"] {
+    position: absolute;
+}
+
+.label-add-item-dialog .label-hint {
+    color: #999;
+    padding-left: 20px;
+}
+
+.label-add-item-dialog .explanation {
+    margin-bottom: 20px;
+}
+
+.label-add-item-dialog select {
+    margin-top: 4px;
+    margin-left: 20px;
+}
+
+/* trackpipe/public/css/label/band_items_picker.css */
+
+.band-items-picker-list {
+    max-height: 106px;
+    overflow: scroll;
+    margin: 0;
+    padding: 7px 9px;
+    border: 3px solid rgb(204, 204, 204);
+}
+.band-items-picker-list li {
+    font-size: 0;
+    margin: 0 0 9px 0;
+    padding: 0;
+    list-style: none;
+}
+.band-items-picker-list li:last-child {
+    margin-bottom: 0;
+}
+.band-items-picker-list label > * {
+    display: inline-block;
+    vertical-align: middle;
+}
+input[type="checkbox"].band-items-picker-checkbox {
+    margin-right: 13px;
+}
+.band-items-picker-thumb {
+    width: 25px;
+    height: 25px;
+    margin-right: 7px;
+    background-color: rgb(204, 204, 204);
+}
+.band-items-picker-title {
+    font-size: 13px;
+    width: 225px;
+}
+.band-items-picker-list .disabled .band-items-picker-title {
+    color: #999;
+}
+.band-items-picker-list .disabled .band-items-picker-thumb {
+    opacity: 0.5;
+}
+
+.band-items-picker-hint {
+    color: #999;
+    font-weight: 300;
+    margin: 5px 0 0 0;
+}
+
+/* trackpipe/public/css/label/add_artist_dialogs.css */
+.add-artist p.add-artist-instructions {
+    font-size: 15px;
+ }
+
+.add-artist-subdomain-prefix {
+    color: #999;
+}
+
+/* overly specific selector to override overly specific selector in forms.css */
+.label-style form input.add-artist-subdomain-field {
+    width: 130px;
+    font-weight: bold;
+    display: inline-block;
+    height: 17px;
+}
+
+.field-wrapper.add-artist-tralbum-picker {
+    margin-top: 20px;
+}
+
+.add-artist-tralbum-picker .field {
+    margin-top: 8px;
+}
+
+.add-existing-artist form .field-wrapper.subdomain {
+    margin-bottom: 5px;
+}
+
+.add-existing-artist form .field-wrapper.hide-artist {
+    margin-top: 8px;
+}
+
+.hide-artist span.checkbox.leftward {
+    width: 21px;
+    text-align: left;
+}
+
+.hide-artist span.checkbox.leftward input {
+    margin-bottom: 2px;
+}
+
+.add-artist-matching-band {
+    margin-top: 5px;
+    margin-left: 144px;
+    height: 25px;
+    opacity: 0;
+    transition: opacity .2s;
+    color: #30C96F;
+    font-style: italic;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.add-artist-matching-band.has-match {
+    opacity: 1;
+}
+.add-artist-matching-band > * {
+    vertical-align: middle;
+}
+.add-artist-matching-band img {
+    width: 25px;
+    height: 25px;
+}
+
+.add-existing-artist .currency-change-warning {
+    font-size: 13px;
+    color: #c00;
+    margin-left: 94px;
+    margin-top: 20px;
+}
+
+/* trackpipe/public/css/tralbum_tooltips.css */
+.tralbum-tooltip-parent {
+    visibility: hidden;
+    display: none;
+    width: 0;
+    height: 0;
+}
+
+.tralbum-tooltip {
+    background: rgba(0,161,198, 0.95);
+    border-radius: 200px;
+    z-index: 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 21px;
+}
+.tralbum-tooltip .tralbum-tooltip-inner {
+    width: 170px;
+    margin: 0 auto;
+    margin-top: 268px;
+    color: #FFF;
+    font-size: 18px;
+    text-align: center;
+    white-space: normal;
+    position: relative;
+    display: block;
+}
+#rightColumn a.dismiss-tooltip,
+.tralbum-tooltip-parent a.dismiss-tooltip {
+    color: #FFF;
+    font-size: 13px;
+    display: block;
+    margin-top: 12px;
+    font-weight: bold;
+}
+
+.tralbum-tooltip-parent.show-tooltip,
+.tralbum-tooltip-parent.show-tooltip .tralbum-tooltip,
+.tralbum-tooltip-parent.show-tooltip .inner-circle-contents,
+.tralbum-tooltip-parent.show-tooltip .inner-squarecle-contents {
+    visibility: visible;
+    display: block;
+}
+
+.tralbum-tooltip-parent .tralbum-tooltip-outer {
+    position: relative;
+    width: 400px;
+    height: 400px;
+    z-index: 1;
+    cursor: default;
+}
+
+.tralbum-tooltip-parent.show-tooltip .tralbum-tooltip-outer {
+    display: inline-block;
+}
+.tralbum-tooltip-parent.show-tooltip .tralbum-tooltip {
+    animation: 0.5s ease 0s 1 normal both bounce-in;
+}
+.tralbum-tooltip-parent.show-tooltip .inner-circle,
+.tralbum-tooltip-parent.show-tooltip .inner-squarecle {
+    transform: scale(1);
+}
+.tralbum-tooltip-parent.show-tooltip .inner-circle-contents,
+.tralbum-tooltip-parent.show-tooltip .inner-squarecle-contents {
+    opacity: 1;
+    text-align: center;
+}
+
+.tralbum-tooltip-outer > * {
+    position: absolute;
+    width: 400px;
+    height: 400px;
+}
+.tralbum-tooltip-outer .inner-circle-wrapper {
+    width: 80px;
+}
+.tralbum-tooltip-outer .inner-circle {
+    position: relative;
+    width: 78px;
+    height: 78px;
+    background-color: #FFF;
+    opacity: 1;
+    border-radius: 70px;
+    transform: scale(0);
+    z-index: 2;
+    display: block;
+    transition: transform 0.3s 0s;
+}
+.tralbum-tooltip-outer .inner-circle-contents {
+    z-index: 13;
+    position: relative;
+    top: -50px;
+    opacity: 0;
+    transition: opacity 0.2s, visibility 0s 0s;
+    display: block;
+    font-size: 14px;
+    width: auto;
+}
+.tralbum-tooltip-outer .inner-squarecle-wrapper {
+    width: 80px;
+    left: 161px;
+    top: 160px;
+}
+.tralbum-tooltip-outer .inner-squarecle {
+    position: relative;
+    background-color: #FFF;
+    opacity: 1;
+    border-radius: 7px;
+    transform: scale(0);
+    z-index: 2;
+    display: block;
+    transition: transform 0.3s 0s;
+}
+.tralbum-tooltip-outer .inner-squarecle-contents {
+    z-index: 13;
+    position: relative;
+    opacity: 0;
+    transition: opacity 0.2s, visibility 0s 0s;
+    display: block;
+    font-size: 14px;
+    width: auto;
+}
+
+.has-menubar.invertIconography .tralbum-tooltip-outer .inner-circle,
+.has-menubar.invertIconography .tralbum-tooltip-outer .inner-squarecle {
+    background-color: #212121;
+}
+
+/* bio image tooltip */
+
+.tralbum-tooltip-parent.bio-image .tralbum-tooltip-outer {
+    right: 138px;
+    top: -103px;
+}
+.tralbum-tooltip-parent.bio-image .tralbum-tooltip-outer .inner-squarecle {
+    width: 110px;
+    height: 25px;
+    top: -20px;
+    left: -17px;
+}
+.tralbum-tooltip-parent.bio-image .tralbum-tooltip-outer .inner-squarecle-contents {
+    font-size: 1em;
+    font-weight: bold;
+    line-height: 1;
+    display: block;
+    width: 95px;
+    top: -38px;
+    left: -10px;
+} 
+.tralbum-tooltip-parent.bio-image .tralbum-tooltip .tralbum-tooltip-inner {
+    margin-top: 229px;
+}
+.tralbum-tooltip-parent.bio-image .tralbum-tooltip-inner .progress {
+    display: block;
+    font-size: 0.8em;
+    margin-bottom: 10px;
+}
+
+/* bio text tooltip */
+
+.tralbum-tooltip-parent.bio-text .tralbum-tooltip-outer {
+    right: 151px;
+    top: -181px;
+}
+.tralbum-tooltip-parent.bio-text .tralbum-tooltip-outer .inner-squarecle {
+    width: 132px;
+    height: 25px;
+    top: -20px;
+    left: -17px;
+}
+.tralbum-tooltip-parent.bio-text .tralbum-tooltip-outer .inner-squarecle-contents {
+    font-size: 1em;
+    font-weight: bold;
+    line-height: 1;
+    display: block;
+    width: 95px;
+    top: -38px;
+    left: -10px;
+    text-align: left;
+} 
+.tralbum-tooltip-parent.bio-text .tralbum-tooltip .tralbum-tooltip-inner {
+    margin-top: 229px;
+}
+.tralbum-tooltip-parent.bio-text .tralbum-tooltip-inner .progress {
+    display: block;
+    font-size: 0.8em;
+    margin-bottom: 10px;
+}
+
+
+/* dashboard menubar link tooltip */
+
+.tralbum-tooltip-parent.dash-link .tralbum-tooltip-outer {
+    top: -204px;
+    right: 248px;
+}
+.tralbum-tooltip-parent.dash-link .tralbum-tooltip-outer .inner-circle-contents {
+    font-size: 14px;
+    width: 78px;
+}
+.tralbum-tooltip-parent.dash-link .tralbum-tooltip-outer .inner-circle-contents a.tooltip-action {
+    color: #000;
+}
+.tralbum-tooltip-parent.dash-link .tralbum-tooltip .tralbum-tooltip-inner {
+    width: 200px;
+}
+.tralbum-tooltip-parent.dash-link .tralbum-tooltip-inner .progress {
+    display: block;
+    font-size: 0.8em;
+    margin-bottom: 10px;
+}
+.tralbum-tooltip-parent.dash-link .tralbum-tooltip-outer .inner-circle-wrapper {
+    left: 161px;
+    top: 167px;
+}
+
+
+/* trackpipe/public/jslib/farbtastic/1.2/farbtastic.css */
+.farbtastic {
+  position: relative;
+}
+.farbtastic * {
+  position: absolute;
+  cursor: crosshair;
+}
+.farbtastic, .farbtastic .wheel {
+  width: 195px;
+  height: 195px;
+}
+.farbtastic .color, .farbtastic .overlay {
+  top: 47px;
+  left: 47px;
+  width: 101px;
+  height: 101px;
+}
+.farbtastic .wheel {
+  background: url(/jslib/farbtastic/1.2/wheel.png) no-repeat;   /* BC: url modified */
+  width: 195px;
+  height: 195px;
+}
+.farbtastic .overlay {
+  background: url(/jslib/farbtastic/1.2/mask.png) no-repeat;    /* BC: url modified */
+}
+.farbtastic .marker {
+  width: 17px;
+  height: 17px;
+  margin: -8px 0 0 -8px;
+  overflow: hidden; 
+  background: url(/jslib/farbtastic/1.2/marker.png) no-repeat;  /* BC: url modified */
+}
+
+
+/* trackpipe/public/css/edit_design_dialog.css */
+.ui-dialog.nu-dialog.edit-design-dialog {
+    border: 1px solid #ccc;
+}
+
+
