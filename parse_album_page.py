@@ -59,9 +59,10 @@ async def _get_good_profiles():
 class BrowserSession:
 	def __init__(self, ok_clients: list):
 		self.ok_clients = ok_clients
-		self.requests_made = 0
 		self.new_session()
-		self.retire_after = random.randint(40, 100)
+		self.requests_made = 0
+		self.retire_after = random.randint(40, 120)
+		self.lock = asyncio.Lock()
 
 	def rotate_client(self):
 		self.client_identifier = random.choice(self.ok_clients)
@@ -86,9 +87,10 @@ class BrowserSession:
 
 	async def get(self, url, **kwargs):
 		if self.requests_made >= self.retire_after:
-			self.new_session()
+			async with self.lock:
+				self.new_session()
 			self.requests_made = 0
-			self.retire_after = random.randint(40, 100)
+			self.retire_after = random.randint(40, 120)
 
 		resp = await self.session.get(url,**kwargs)
 		self.requests_made += 1
@@ -151,27 +153,14 @@ class Scraper:
 		num_tracks = nozero((schema['numTracks'] or current['track_count'] or ""))
 		keywords = schema.get("keywords") if isinstance(schema, dict) else []
 
-		# All track urls & total time
-		track_url_df = pd.DataFrame([
-			{
-				"url": t['item']['@id']
-			}
-			for t in schema["track"]["itemListElement"]
-		])
-		track_dur_df = pd.DataFrame([
-			{
-				"position": t['track_num'],
-				"duration": t['duration'],
-			}
-			for t in track_info
-		])
-		total_time = timedelta(seconds=int(track_dur_df["duration"].sum()))
+		# Total time
+		track_durs = [t['duration'] for t in track_info]
+		total_time = timedelta(seconds=int(sum(track_durs)))
 
 		# All track images
+		track_urls = [t['item']['@id'] for t in schema["track"]["itemListElement"]]
 		track_art_id = []
-		tasks = [self.get_art_id(url) for url in track_url_df["url"]]
-
-		for coro in asyncio.as_completed(tasks):
+		for coro in asyncio.as_completed(self.get_art_id(url) for url in track_urls):
 			result = await coro
 			if result:
 				track_art_id.append(result)
@@ -181,14 +170,14 @@ class Scraper:
 				"url": url,
 				"album": album_name,
 				"artist": artist_name,
-				"num_tracks": num_tracks,
 				"total_time": str(total_time),
+				"num_tracks": num_tracks,
 				"keywords": keywords,
-				"release_date": current.get("release_date") or "",
-				"publish_date": current.get("publish_date") or "",
 				"new_date": current.get("new_date") or "",
+				"publish_date": current.get("publish_date") or "",
+				"release_date": current.get("release_date") or "",
 				"mod_date": current.get("mod_date") or "",
-				"album_art_id": current.get("art_id"),
+				"album_art_id": str(current.get("art_id")),
 				"track_art_id": track_art_id
 		}
 
@@ -200,31 +189,32 @@ class Scraper:
 
 async def get_ok_clients():
 	#STARTUP TEST CLIENTS
-	force = input("Retest client identifiers? [y/N]:").strip().lower() in ('y', 'yes')
+	force = input("Retest client identifiers? [y/N]:")
 	cache_file = Path("good_profiles.json")
 	if not force and cache_file.exists():
 		with open(cache_file, "r") as f:
 				ok_clients = json.load(f)
-		print("Good Profiles (old cache):")
+		log.info("Using good profiles (old cache)...")
 	else:
 		if not cache_file.exists():
-			print("CACHE_FILE doesn't exist. Starting test...")
+			log.info("CACHE_FILE doesn't exist. Starting test...")
 		ok_clients, _ = await _get_good_profiles()
 		with open(cache_file, "w") as f:
 				json.dump(ok_clients, f)
-		print("Good Profiles (new cache):")
-	print(ok_clients)
+		log.info("Using good profiles (new cache)...")
 	return ok_clients
 
 async def main():
 	ok_clients = await get_ok_clients()
 
-	url1 = 'https://daysofblue.bandcamp.com/album/--12'
-	url2 = 'https://noproblematapes.bandcamp.com/album/--89'
-	url3 = 'https://geometriclullaby.bandcamp.com/album/geo-c07'
-	urls = [url1, url2, url3]
-
-	start_time = time.time()
+	urls = [
+		'https://giftsfromhome.bandcamp.com/album/-',
+		'https://daysofblue.bandcamp.com/album/--12',
+		'https://noproblematapes.bandcamp.com/album/--89',
+		'https://geometriclullaby.bandcamp.com/album/geo-c07',
+		'https://desertsand.bandcamp.com/album/vja-tal-qalb',
+		'https://blackmoon00.bandcamp.com/album/-'
+	]
 
 	random.seed(42)
 	s = BrowserSession(ok_clients=ok_clients)
@@ -233,31 +223,37 @@ async def main():
 	soups = []
 	results = []
 
-	for url in urls:
+	start_time = time.time()
+
+	async def fetch(url):
 		r = await s.get(url)
-		soup = BeautifulSoup(r.text, 'lxml') # type: ignore
+		soup = BeautifulSoup(r.text or "", "lxml")
+		return url, r, soup
+
+	for coro in asyncio.as_completed(fetch(url) for url in urls):
+		url, _, soup = await coro
+
 		if soup.title and soup.title.get_text(strip=True) == "Client Challenge":
-			failed.append({
-				"url": url,
-				"profile": s.client_identifier,
-				})
-			log.warning(f"Client Challenge with {s.client_identifier} for {url}")
+			failed.append({"url": url, "profile": s.client_identifier})
+			log.warning(f"Client Challenge with {s.client_identifier}")
 			s.new_session()
 			continue
+
 		soups.append(soup)
 
-	print("Albums fetched:")
-	print([nozero(soup.title.get_text(strip=True)) for soup in soups])
+	# print([nozero(soup.title.get_text(strip=True)) for soup in soups])
+	log.info(f"{len(soups)} albums fetched in {time.time() - start_time:.4f} seconds ")
+	start_time = time.time()
 
-	for soup in tqdm(soups, desc="Fetching albums"):
+	for soup in tqdm(soups, desc="Getting data"):
 		result = await scraper.scrape_album_page(soup)
 		results.append(result)
 
 	timestamp = datetime.now().strftime("%y%m%dT%H%M")
-	results_file = Path(f"results_{timestamp}.json")
+	results_file = Path(f"source_{timestamp}.json")
 	with open(results_file, "w", encoding="utf-8") as f:
 			json.dump(results, f, indent=2, ensure_ascii=False)
-	log.info(f"Saved to {results_file}")
+	log.info(f"Saved to: {results_file}")
 	log.info("--- %s seconds ---" % (time.time() - start_time))
 
 if __name__ == "__main__":
