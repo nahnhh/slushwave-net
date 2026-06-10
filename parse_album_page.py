@@ -4,6 +4,7 @@ import os
 import random
 import re
 import hashlib
+import time
 from tqdm import tqdm
 from typing import Any, Dict, List, Optional
 import pandas as pd
@@ -36,7 +37,7 @@ async def _test_profile(profile):
 	s = AsyncSession(client_identifier=profile)
 	try:
 		r = await s.get(TEST_URL)
-		soup = BeautifulSoup(r.text, "lxml")
+		soup = BeautifulSoup(r.text, "lxml") # type: ignore
 		challenged = (soup.title and soup.title.get_text(strip=True) == "Client Challenge")
 		return profile, challenged
 
@@ -100,24 +101,40 @@ def nozero(text: Any) -> str:
 		return re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)
 
 class Scraper:
-	def __init__(self, session_or_clients):
+	def __init__(self, session_or_clients, sem=150):
 		if isinstance(session_or_clients, BrowserSession):
 			self.s = session_or_clients
 		else:
 			self.s = BrowserSession(session_or_clients)
-	
+		self.sem = asyncio.Semaphore(sem)
+		self.seen_icon = set()
+		self.seen_hash = set()
+		self.lock = asyncio.Lock()
+
 	async def get_art_id(self, url):
-		r = await self.s.get(url)
-		soup = BeautifulSoup(r.text or "", "lxml")
+		async with self.sem:
+			r = await self.s.get(url)
+			soup = BeautifulSoup(r.text or "", "lxml")
 
-		icon_url = soup.select_one('link[rel="shortcut icon"]')['href']
+			icon_url = soup.select_one('link[rel="shortcut icon"]')['href'] # type: ignore
+			# check for cached art urls
+			async with self.lock:
+				if icon_url in self.seen_icon:
+					return None
+				self.seen_icon.add(icon_url)
 
-		img = await self.s.get(icon_url)
-		img_hash = hashlib.sha256(img.content).hexdigest()
+			img = await self.s.get(icon_url)
+			img_hash = hashlib.sha256(img.content).hexdigest() # type: ignore
 
-		art_id = re.search(r'a(\d+)_', icon_url).group(1)
+			async with self.lock:
+				# check for hash dedupes
+				if img_hash in self.seen_hash:
+					return None
+				self.seen_hash.add(img_hash)
 
-		return art_id, img_hash
+			art_id = re.search(r'a(\d+)_', icon_url).group(1) # type: ignore
+
+			return art_id
 
 	async def scrape_album_page(self, soup) -> Dict[str, Any]:
 		"""Fetch album page and returns all required metadata."""
@@ -151,34 +168,35 @@ class Scraper:
 		total_time = timedelta(seconds=int(track_dur_df["duration"].sum()))
 
 		# All track images
-		results = await asyncio.gather(
-		*(self.get_art_id(url) for url in track_url_df["url"])
-		)
+		track_art_id = []
+		tasks = [self.get_art_id(url) for url in track_url_df["url"]]
 
-		track_art_df = pd.DataFrame(results, columns=["art_id", "img_hash"]).drop_duplicates(subset=["img_hash"])
-		log.info(f"{soup_title} - Unique image hashes: {track_art_df['img_hash'].nunique()}")
-		
+		for coro in asyncio.as_completed(tasks):
+			result = await coro
+			if result:
+				track_art_id.append(result)
 
+		# Results in JSON format
 		result = {
 				"url": url,
 				"album": album_name,
 				"artist": artist_name,
 				"num_tracks": num_tracks,
-				"keywords": keywords,
 				"total_time": str(total_time),
+				"keywords": keywords,
 				"release_date": current.get("release_date") or "",
 				"publish_date": current.get("publish_date") or "",
 				"new_date": current.get("new_date") or "",
 				"mod_date": current.get("mod_date") or "",
 				"album_art_id": current.get("art_id"),
-				"track_art_id": track_art_df.get("art_id").tolist()
+				"track_art_id": track_art_id
 		}
 
 		return result
 
-# =======
-# OKAY!!!
-# =======
+# ====================================
+# OKAY!!! LET'S GET THIS THING RUNNING
+# ====================================
 
 async def get_ok_clients():
 	#STARTUP TEST CLIENTS
@@ -196,25 +214,28 @@ async def get_ok_clients():
 				json.dump(ok_clients, f)
 		print("Good Profiles (new cache):")
 	print(ok_clients)
+	return ok_clients
 
 async def main():
-	OK_CLIENTS = await get_ok_clients()
+	ok_clients = await get_ok_clients()
 
 	url1 = 'https://daysofblue.bandcamp.com/album/--12'
 	url2 = 'https://noproblematapes.bandcamp.com/album/--89'
 	url3 = 'https://geometriclullaby.bandcamp.com/album/geo-c07'
 	urls = [url1, url2, url3]
 
+	start_time = time.time()
+
 	random.seed(42)
-	s = BrowserSession(OK_CLIENTS)
-	scraper = Scraper(s)
+	s = BrowserSession(ok_clients=ok_clients)
+	scraper = Scraper(s, sem=150)
 	failed = []
 	soups = []
 	results = []
 
 	for url in urls:
 		r = await s.get(url)
-		soup = BeautifulSoup(r.text, 'lxml')
+		soup = BeautifulSoup(r.text, 'lxml') # type: ignore
 		if soup.title and soup.title.get_text(strip=True) == "Client Challenge":
 			failed.append({
 				"url": url,
@@ -228,7 +249,7 @@ async def main():
 	print("Albums fetched:")
 	print([nozero(soup.title.get_text(strip=True)) for soup in soups])
 
-	for soup in tqdm(soups, desc="Extracting metadata from albums..."):
+	for soup in tqdm(soups, desc="Fetching albums"):
 		result = await scraper.scrape_album_page(soup)
 		results.append(result)
 
@@ -237,6 +258,7 @@ async def main():
 	with open(results_file, "w", encoding="utf-8") as f:
 			json.dump(results, f, indent=2, ensure_ascii=False)
 	log.info(f"Saved to {results_file}")
+	log.info("--- %s seconds ---" % (time.time() - start_time))
 
 if __name__ == "__main__":
 	asyncio.run(main())
