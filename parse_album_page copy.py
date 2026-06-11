@@ -145,6 +145,7 @@ class AlbumScraper:
 		self.sem = asyncio.Semaphore(sem)
 		self.seen_icon = set()
 		self.seen_hash = set()
+		self.seen_art_id = set()
 		self.lock = asyncio.Lock()
 
 	async def get_art_id(self, url):
@@ -160,6 +161,11 @@ class AlbumScraper:
 				self.seen_icon.add(icon_url)
 
 			art_id = re.search(r'a(\d+)_', icon_url).group(1) # type: ignore
+			async with self.lock:
+				# Check for existing art_id in artwork.json
+				if art_id in self.seen_art_id:
+					return art_id
+				self.seen_art_id.add(art_id)
 
 			img = (await self.s.get(icon_url)).content # type: ignore
 			img_hash = hashlib.sha256(img).hexdigest() # type: ignore
@@ -169,8 +175,23 @@ class AlbumScraper:
 				if img_hash in self.seen_hash:
 					return None
 				self.seen_hash.add(img_hash)
-	
-			return art_id
+
+			# ---------- ColorThief ----------
+			ct = ColorThief(BytesIO(img)) # type: ignore
+			palette = ct.get_palette(color_count=8, quality=10)
+			dom_color = pick_dominant_oklch(palette)
+
+			record = {
+				"art_id": art_id,
+				"dom_color": dom_color,
+				"color_palette": [f"#{r:02X}{g:02X}{b:02X}" for r, g, b in palette],
+				"date_fetched": datetime.now().strftime("%d %b %Y %H:%M:%S VNT")
+			}
+
+			# ---------- JSONL ----------
+			async with self.lock:
+				async with aiofiles.open("artwork.jsonl","a",encoding="utf-8") as f:
+					await f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 	async def scrape_album_page(self, soup) -> Dict[str, Any]:
 		"""Fetch album page and returns all required metadata."""
@@ -243,8 +264,8 @@ async def load_artwork_cache(path="artwork.jsonl"):
 	if not os.path.exists(path):
 		return seen_art_id
 
-	with open(path,"r",encoding="utf-8") as f:
-		for line in f:
+	async with aiofiles.open(path,"r",encoding="utf-8") as f:
+		async for line in f:
 			try:
 				seen_art_id.add(json.loads(line)["art_id"])
 			except Exception:
@@ -268,6 +289,7 @@ async def main():
 	random.seed(42)
 	s = BrowserSession(ok_clients=ok_clients)
 	scraper = AlbumScraper(s, sem=150)
+	scraper.seen_art_id = await load_artwork_cache()
 	failed = []
 	soups = []
 	results = []

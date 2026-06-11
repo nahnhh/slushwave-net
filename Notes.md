@@ -47,7 +47,7 @@ However, still have to iterate through each *album* site for:
 	+ `album_art_id` is sometimes the same as `track_art_id` without the leading 0, but the link still works anyway.
 
 - Todo next:
-	+ Install images inside the `IMAGE_DIR`. Link: `f"https://f4.bcbits.com/img/a{art_id}_1x1_700.avif"`
+	+ Download images inside the `IMAGE_DIR`. Link: `f"https://f4.bcbits.com/img/a{art_id}_1x1_700.avif"`
 	+ `parse_music_page.py` to collect alias & album urls.
 
 
