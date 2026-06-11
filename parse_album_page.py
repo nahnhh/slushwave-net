@@ -30,6 +30,7 @@ logging.basicConfig(
 log = logging.getLogger('rich')
 
 LINKS_FILE = Path.cwd() / 'slushwave-bandcamp-links.txt'
+ALBUMS_CACHE_JSONL = Path("albums_cache.jsonl")
 ARTWORK_JSONL =  Path("artwork.jsonl")
 ARTWORK_URL = "https://f4.bcbits.com/img/a{art_id}_3"
 TEST_URL = "https://giftsfromhome.bandcamp.com/album/-"
@@ -264,7 +265,7 @@ class AlbumScraper:
 				"publish_date": current.get("publish_date") or "",
 				"release_date": current.get("release_date") or "",				
 				"mod_date": current.get("mod_date") or "",
-				"album_art_id": str(current.get("art_id")),
+				"album_art_id": str(current.get("art_id")).zfill(10),
 				"track_art_id": track_art_id
 		}
 
@@ -274,11 +275,11 @@ class AlbumScraper:
 # OKAY!!! LET'S GET THIS THING RUNNING
 # ====================================
 
-async def get_ok_clients():
+async def get_ok_clients(skip=True):
 	#STARTUP TEST CLIENTS
 	force = input("Retest client identifiers? [y/N]:")
 	cache_file = Path("good_profiles.json")
-	if not force and cache_file.exists():
+	if skip or (not force and cache_file.exists()):
 		with open(cache_file, "r") as f:
 				ok_clients = json.load(f)
 		log.info("Using good profiles (old cache)...")
@@ -292,7 +293,7 @@ async def get_ok_clients():
 	return ok_clients
 
 async def main():
-	ok_clients = await get_ok_clients()
+	ok_clients = await get_ok_clients(skip=True)
 
 	urls = [
 		'https://giftsfromhome.bandcamp.com/album/-',
@@ -348,14 +349,23 @@ async def main():
 	results_file = Path(f"albums_{timestamp}.json")
 	with open(results_file, "w", encoding="utf-8") as f:
 			json.dump(albums, f, indent=2, ensure_ascii=False)
-	log.info(f"Saved to: {results_file}")
-	log.info("--- %s seconds ---" % (time.time() - start_time))
+	log.info(f"Albums data saved to: {results_file} ({time.time() - start_time:4f})s")
 
 	# ---- SCRAPING ARTWORKS ----
 	start_time = time.time()
-	await artwork_scraper.scrape_many(art_ids)
+	artworks = await artwork_scraper.scrape_many(art_ids)
+
+	saved_count = sum(
+		1 for r in artworks
+		if r is not None and not isinstance(r, Exception)
+	)
+
+	total_count = len(art_ids)
+	skipped_count = total_count - saved_count
+
 	if ARTWORK_JSONL.exists():
-		log.info(f"Saved to: {ARTWORK_JSONL} ({start_time - time.time():2f}s)")
+		log.info(f"Artworks data saved to: {results_file}")
+		log.info(f"{saved_count} saved, {skipped_count} skipped, {total_count} total")
 
 
 if __name__ == "__main__":
