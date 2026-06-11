@@ -46,9 +46,13 @@ However, still have to iterate through each *album* site for:
 	+ Order of dates is usually: `new_date -> publish_date -> release_date -> mod_date`
 	+ `album_art_id` is sometimes the same as `track_art_id` without the leading 0, but the link still works anyway.
 
-- Todo next:
-	+ Download images inside the `IMAGE_DIR`. Link: `f"https://f4.bcbits.com/img/a{art_id}_1x1_700.avif"`
+- Todo next 11/06:
+	+ Create `artwork.json`: {art_id, dom_color, palette(8), date_fetched} with `color-thief-py`, BytesIO to wrap link: `f"https://f4.bcbits.com/img/a{art_id}_3"`
+  + Read artwork cache to avoid processing existing art_id.
 	+ `parse_music_page.py` to collect alias & album urls.
+  + Try fetching albums with no tracks
+  + Workflow: AlbumScraper -> albums.json -> collect unique art_ids -> ArtworkScraper -> artwork.jsonl
+  + Log.info: Saved how many new artworks to `artwork.jsonl` out of X artworks.
 
 
 ### Teaching myself how to scrape data

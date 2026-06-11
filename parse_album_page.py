@@ -1,4 +1,6 @@
 import asyncio
+import aiofiles
+from io import BytesIO
 import json
 import os
 import random
@@ -27,14 +29,12 @@ logging.basicConfig(
 )
 log = logging.getLogger('rich')
 
-BASE_DIR = Path.cwd()
-LINKS_FILE = BASE_DIR / 'slushwave-bandcamp-links.txt'
-OUTPUT_FILE = BASE_DIR / 'bc-albums-image-links.csv'
-IMAGES_DIR = BASE_DIR / 'images'
-
-#STARTUP TEST PROFILES
+LINKS_FILE = Path.cwd() / 'slushwave-bandcamp-links.txt'
+ARTWORK_JSONL =  Path("artwork.jsonl")
+ARTWORK_URL = "https://f4.bcbits.com/img/a{art_id}_3"
 TEST_URL = "https://giftsfromhome.bandcamp.com/album/-"
 
+#STARTUP TEST PROFILES
 async def _test_profile(profile):
 	s = AsyncSession(client_identifier=profile)
 	try:
@@ -106,7 +106,6 @@ def nozero(text: Any) -> str:
 
 def rgb_to_oklch(rgb):
 	r, g, b = rgb
-
 	c = Color("srgb", [r / 255, g / 255, b / 255]).convert("oklch")
 	l, chroma, hue = c.coords()
 
@@ -131,6 +130,59 @@ def pick_dominant_oklch(palette):
 
 	return max(candidates, key=lambda c: c["c"])
 
+class ArtworkScraper:
+	def __init__(self, session_or_clients, sem=150):
+		if isinstance(session_or_clients, BrowserSession):
+			self.s = session_or_clients
+		else:
+			self.s = BrowserSession(session_or_clients)
+		self.sem = asyncio.Semaphore(sem)
+		self.seen_art_id = set()
+		self.lock = asyncio.Lock()
+
+	def load_cache(self):
+		if not ARTWORK_JSONL.exists():
+			return
+
+		with open(ARTWORK_JSONL, "r", encoding="utf-8") as f:
+			for line in f:
+				try:
+					self.seen_art_id.add(json.loads(line)["art_id"])
+				except (json.JSONDecodeError, KeyError):
+					continue
+
+	async def fetch_artwork(self, art_id):
+		async with self.sem:
+			async with self.lock:
+				if art_id in self.seen_art_id:
+					return None
+				self.seen_art_id.add(art_id)
+
+			url = ARTWORK_URL.format(art_id=art_id)
+			img = (await self.s.get(url)).content # type: ignore
+			ct = ColorThief(BytesIO(img)) # type: ignore
+			palette = ct.get_palette(color_count=8, quality=10)
+			dom_color = pick_dominant_oklch(palette)
+
+			record = {
+				"art_id": str(art_id),
+				"dom_color": dom_color,
+				"color_palette": [f"#{r:02X}{g:02X}{b:02X}" for r, g, b in palette],
+				"date_fetched": datetime.now().strftime("%d %b %Y %H:%M:%S VNT")
+			}
+
+			async with self.lock:
+				async with aiofiles.open(ARTWORK_JSONL,"a",encoding="utf-8") as f:
+					await f.write(json.dumps(record,ensure_ascii=False) + "\n")
+
+			return record
+
+	async def scrape_many(self, art_ids):
+		tasks = [self.fetch_artwork(art_id) for art_id in set(art_ids)]
+		results = await asyncio.gather(*tasks, return_exceptions=True)
+
+		return results
+	
 
 class AlbumScraper:
 	def __init__(self, session_or_clients, sem=150):
@@ -180,20 +232,25 @@ class AlbumScraper:
 		url = nozero(schema['@id'])
 		album_name = nozero((schema['name'] or current['title'] or ""))
 		artist_name = nozero((schema['byArtist']['name'] or current['artist'] or ""))
-		num_tracks = nozero((schema['numTracks'] or current['track_count'] or ""))
-		keywords = schema.get("keywords") if isinstance(schema, dict) else []
+		keywords = schema.get("keywords",[])
+		if not keywords:
+			keywords = []
 
-		# Total time
-		track_durs = [t['duration'] for t in track_info]
-		total_time = timedelta(seconds=int(sum(track_durs)))
-
-		# All track images
-		track_urls = [t['item']['@id'] for t in schema["track"]["itemListElement"]]
+		# Total time: Check for number of tracks before computing
+		total_time = timedelta(0)
 		track_art_id = []
-		for coro in asyncio.as_completed(self.get_art_id(url) for url in track_urls):
-			result = await coro
-			if result:
-				track_art_id.append(result)
+		num_tracks = schema.get("numTracks") or current.get("track_count") or 0
+		if int(num_tracks) > 0:
+			track_durs = [t['duration'] for t in track_info]
+			total_time = timedelta(seconds=int(sum(track_durs)))
+
+			# All track images
+			track_urls = [t['item']['@id'] for t in schema["track"]["itemListElement"]]
+			track_art_id = []
+			for coro in asyncio.as_completed(self.get_art_id(url) for url in track_urls):
+				result = await coro
+				if result:
+					track_art_id.append(result)
 
 		# Results in JSON format
 		result = {
@@ -201,7 +258,7 @@ class AlbumScraper:
 				"album": album_name,
 				"artist": artist_name,
 				"total_time": str(total_time),
-				"num_tracks": num_tracks,
+				"num_tracks": int(num_tracks),
 				"keywords": keywords,
 				"new_date": current.get("new_date") or "",
 				"publish_date": current.get("publish_date") or "",
@@ -243,15 +300,22 @@ async def main():
 		'https://noproblematapes.bandcamp.com/album/--89',
 		'https://geometriclullaby.bandcamp.com/album/geo-c07',
 		'https://desertsand.bandcamp.com/album/vja-tal-qalb',
-		'https://blackmoon00.bandcamp.com/album/-'
+		'https://blackmoon00.bandcamp.com/album/-',
+		'https://desertsand.bandcamp.com/album/--30',
+		'https://delusivemystery.bandcamp.com/album/--12'
 	]
 
 	random.seed(42)
 	s = BrowserSession(ok_clients=ok_clients)
-	scraper = AlbumScraper(s, sem=150)
+
+	# ---- SCRAPING ALBUMS ----
+	album_scraper = AlbumScraper(s, sem=150)
+	artwork_scraper = ArtworkScraper(s, sem=150)
+	artwork_scraper.load_cache()
 	failed_urls = set()
 	soups = []
-	results = []
+	albums = []
+	art_ids = set()
 
 	async def fetch(url):
 		r = await s.get(url)
@@ -275,15 +339,24 @@ async def main():
 	start_time = time.time()
 
 	for soup in tqdm(soups, desc="Fetching albums"):
-		result = await scraper.scrape_album_page(soup)
-		results.append(result)
+		album_data = await album_scraper.scrape_album_page(soup)
+		albums.append(album_data)
+		art_ids.add(album_data["album_art_id"])
+		art_ids.update(album_data["track_art_id"])
 
 	timestamp = datetime.now().strftime("%y%m%dT%H%M")
-	results_file = Path(f"source_{timestamp}.json")
+	results_file = Path(f"albums_{timestamp}.json")
 	with open(results_file, "w", encoding="utf-8") as f:
-			json.dump(results, f, indent=2, ensure_ascii=False)
+			json.dump(albums, f, indent=2, ensure_ascii=False)
 	log.info(f"Saved to: {results_file}")
 	log.info("--- %s seconds ---" % (time.time() - start_time))
+
+	# ---- SCRAPING ARTWORKS ----
+	start_time = time.time()
+	await artwork_scraper.scrape_many(art_ids)
+	if ARTWORK_JSONL.exists():
+		log.info(f"Saved to: {ARTWORK_JSONL} ({start_time - time.time():2f}s)")
+
 
 if __name__ == "__main__":
 	asyncio.run(main())
