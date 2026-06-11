@@ -238,21 +238,6 @@ async def get_ok_clients():
 		log.info("Using good profiles (new cache)...")
 	return ok_clients
 
-async def load_artwork_cache(path="artwork.jsonl"):
-	seen_art_id = set()
-	if not os.path.exists(path):
-		return seen_art_id
-
-	with open(path,"r",encoding="utf-8") as f:
-		for line in f:
-			try:
-				seen_art_id.add(json.loads(line)["art_id"])
-			except Exception:
-				continue
-
-	return seen_art_id
-
-# MAIN
 async def main():
 	ok_clients = await get_ok_clients()
 
