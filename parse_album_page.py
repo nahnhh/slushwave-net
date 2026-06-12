@@ -31,8 +31,8 @@ log = logging.getLogger('rich')
 
 GOOD_PROFILES = Path("good_profiles.json")
 LINKS_FILE = Path.cwd() / 'slushwave-bandcamp-links.txt'
-ALBUMS_CACHE_JSONL = Path("albums_cache.jsonl")
-ARTWORK_JSONL =  Path("artwork.jsonl")
+ALBUM_MOD_DATES_JSON = Path("album_mod_dates.json")
+ARTWORKS_JSONL =  Path("artworks.jsonl")
 ARTWORK_URL = "https://f4.bcbits.com/img/a{art_id}_3"
 TEST_URL = "https://giftsfromhome.bandcamp.com/album/-"
 
@@ -133,36 +133,38 @@ def pick_dominant_oklch(palette):
 	return max(candidates, key=lambda c: c["c"])
 
 class ArtworkScraper:
-	def __init__(self, session_or_clients, sem=150, seen_hash=None):
+	def __init__(self, session_or_clients, sem=150):
 		if isinstance(session_or_clients, BrowserSession):
 			self.s = session_or_clients
 		else:
 			self.s = BrowserSession(session_or_clients)
 		self.sem = asyncio.Semaphore(sem)
-		self.seen_hash = seen_hash if seen_hash is not None else set()
 		self.lock = asyncio.Lock()
+		self.seen_hash = set()
 
 	def load_cache(self):
-		if not ARTWORK_JSONL.exists():
+		if not ARTWORKS_JSONL.exists():
 			return
 
-		with open(ARTWORK_JSONL, "r", encoding="utf-8") as f:
+		with open(ARTWORKS_JSONL, "r", encoding="utf-8") as f:
 			for line in f:
 				try:
 					self.seen_hash.add(json.loads(line)["img_hash"])
 				except (json.JSONDecodeError, KeyError):
 					continue
 
-	async def fetch_artwork(self, art_id, img_hash):
+	async def fetch_artwork(self, art_id):
 		async with self.sem:
+			r = await (self.s.get(ARTWORK_URL.format(art_id=art_id)))
+			img = r.content
+			img_hash = hashlib.blake2b(img,digest_size=8).hexdigest()
+
 			async with self.lock:
 				# Check if img_hash is already in artwork.jsonl
 				if img_hash in self.seen_hash:
 					return None
 				self.seen_hash.add(img_hash)
 
-			url = ARTWORK_URL.format(art_id=art_id)
-			img = (await self.s.get(url)).content # type: ignore
 			ct = ColorThief(BytesIO(img)) # type: ignore
 			palette = ct.get_palette(color_count=9, quality=10)
 			dom_color = pick_dominant_oklch(palette)
@@ -176,13 +178,13 @@ class ArtworkScraper:
 			}
 
 			async with self.lock:
-				async with aiofiles.open(ARTWORK_JSONL,"a",encoding="utf-8") as f:
+				async with aiofiles.open(ARTWORKS_JSONL,"a",encoding="utf-8") as f:
 					await f.write(json.dumps(record,ensure_ascii=False) + "\n")
 
 			return record
 
 	async def scrape_many(self, art_ids):
-		tasks = [self.fetch_artwork(art_id) for art_id in set(art_ids)]
+		tasks = [self.fetch_artwork(art_id) for art_id in art_ids]
 		results = await asyncio.gather(*tasks, return_exceptions=True)
 
 		return results
@@ -195,26 +197,20 @@ class AlbumScraper:
 		else:
 			self.s = BrowserSession(session_or_clients)
 		self.sem = asyncio.Semaphore(sem)
-		self.seen_mod_date = {}
+		self.mod_dates = {}
 		self.seen_art_id = set()
 		self.seen_hash = set()
 		self.lock = asyncio.Lock()
 	
 	# Check mod date to see if album has been updated
 	def load_cache(self):
-		if not ALBUMS_CACHE_JSONL.exists():
+		if not ALBUM_MOD_DATES_JSON.exists():
 			return	
 
-		with open(ALBUMS_CACHE_JSONL, "r", encoding="utf-8") as f:
-			for line in f:
-				try:
-					row = json.loads(line)
-					self.seen_mod_date[row["album_id"]] = row["mod_date"]
-				except (json.JSONDecodeError, KeyError):
-					continue
+		with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
+			self.mod_dates = json.load(f)
 
 	async def get_release_data(self, url):
-		self.art_hash_dict[t_art_id] = img_hash
 		async with self.sem:
 			r = await self.s.get(url)
 			soup = BeautifulSoup(r.text or "", "lxml")
@@ -234,31 +230,23 @@ class AlbumScraper:
 					return None
 				self.seen_art_id.add(t_art_id)
 
-			img = await self.s.get(ARTWORK_URL.format(art_id=t_art_id))
-			img_hash = hashlib.blake2b(img.content,digest_size=8).hexdigest()
-
-			async with self.lock:
-				# Check for hash dedupes
-				if img_hash in self.seen_hash:
-					return None
-				self.seen_hash.add(img_hash)
-
-			return t_art_id, img_hash
+			return t_art_id
 
 	async def scrape_album_page(self, soup) -> Dict[str, Any]:
 		"""Fetch album page and returns all required metadata."""
 		# soup_title = nozero(soup.title.get_text(strip=True))
 		schema = json.loads(soup.select("script[type='application/ld+json']")[0].get_text(strip=True))
-		tralbum = json.loads(soup.select_one("[data-tralbum]"))
-		current = tralbum["data-tralbum"]['current']
-		track_info = tralbum["data-tralbum"]['trackinfo']
-		album_id = tralbum['id']
+		tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum", "{}"))
+		current = tralbum.get('current')
 
-		# Check to skip staled albums
-		url = nozero(schema['@id'])
+		# Skip stale albums with no update
+		url = schema.get('@id')
 		mod_date = current.get("mod_date") or ""
-		if mod_date == self.seen_mod_date.get(url):
+		if mod_date == self.mod_dates.get(url):
+			log.info(f"Skipping: no updates for {url}")
 			return None
+		self.mod_dates[url] = mod_date
+
 		# LD+JSON: album name, artist, number of tracks, keywords/tags
 		album_name = nozero((schema['name'] or current['title'] or ""))
 		artist_name = nozero((schema['byArtist']['name'] or current['artist'] or ""))
@@ -269,6 +257,7 @@ class AlbumScraper:
 		total_time = timedelta(0)
 		num_tracks = schema.get("numTracks") or current.get("track_count") or 0
 		if int(num_tracks) > 0:
+			track_info = tralbum.get('trackinfo')
 			track_durs = [t['duration'] for t in track_info]
 			total_time = timedelta(seconds=int(sum(track_durs)))
 
@@ -280,16 +269,6 @@ class AlbumScraper:
 					continue
 				t_art_id = result
 				track_art_id.append(t_art_id)
-
-		# Results in JSON format
-		record = {
-				"album_id": album_id,
-				"mod_date": mod_date,
-		}
-
-		async with self.lock:
-			async with aiofiles.open(ALBUMS_CACHE_JSONL,"a",encoding="utf-8") as f:
-				await f.write(json.dumps(record,ensure_ascii=False) + "\n")
 
 		result = {
 				"url": url,
@@ -304,7 +283,6 @@ class AlbumScraper:
 				"mod_date": mod_date,
 				"album_art_id": str(current.get("art_id")).zfill(10),
 				"track_art_id": track_art_id,
-				"album_id": album_id
 		}
 
 		return result
@@ -314,20 +292,18 @@ class AlbumScraper:
 # ====================================
 
 async def get_ok_clients(skip=True):
-	#STARTUP TEST CLIENTS
-	if not skip:
-		force = input("Retest client identifiers? [y/N]:")
-	if skip or (not force and GOOD_PROFILES.exists()):
-		with open(GOOD_PROFILES, "r") as f:
-			ok_clients = json.load(f)
-		log.info("Using good profiles (old cache)...")
-	else:
-		if not GOOD_PROFILES.exists():
-			log.info("CACHE_FILE doesn't exist. Starting test...")
-		ok_clients, _ = await get_good_profiles()
-		with open(GOOD_PROFILES, "w") as f:
-			json.dump(ok_clients, f)
-		log.info("Using good profiles (new cache)...")
+	if GOOD_PROFILES.exists():
+		use_cache = skip or (
+			input("Retest client identifiers? [y/N]: ").strip().lower() != "y"
+		)
+		if use_cache:
+			with open(GOOD_PROFILES) as f:
+				return json.load(f)
+
+	log.info("Testing client identifiers...")
+	ok_clients, _ = await get_good_profiles()
+	with open(GOOD_PROFILES, "w") as f:
+		json.dump(ok_clients, f)
 	return ok_clients
 
 async def main():
@@ -350,7 +326,7 @@ async def main():
 	# ---- SCRAPING ALBUMS ----
 	album_scraper = AlbumScraper(s, sem=150)
 	artwork_scraper = ArtworkScraper(s, sem=150)
-	# album_scraper.load_cache()
+	album_scraper.load_cache()
 	artwork_scraper.load_cache()
 	failed_urls = set()
 	soups = []
@@ -381,33 +357,37 @@ async def main():
 	for soup in tqdm(soups, desc="Fetching albums"):
 		album_data = await album_scraper.scrape_album_page(soup)
 		if not album_data:
-			log.exception(f"Could not fetch data.")
 			continue
 		albums.append(album_data)
 		art_ids.add(album_data["album_art_id"])
 		art_ids.update(album_data["track_art_id"])
+	
+	if not albums:
+		log.info("No new or updated albums found. Exiting.")
+		return
 
 	timestamp = datetime.now().strftime("%y%m%dT%H%M")
 	results_file = Path(f"albums_{timestamp}.json")
 	with open(results_file, "w", encoding="utf-8") as f:
 			json.dump(albums, f, indent=2, ensure_ascii=False)
+	with open(ALBUM_MOD_DATES_JSON, "w", encoding="utf-8") as f:
+		json.dump(album_scraper.mod_dates,f,ensure_ascii=False,indent=2)
 	log.info(f"Albums data saved to: {results_file}")
 
 	# ---- SCRAPING ARTWORKS ----
 	artworks = await artwork_scraper.scrape_many(art_ids)
 
-	saved_count = sum(
+	new_saved_count = sum(
 		1 for r in artworks
 		if r is not None and not isinstance(r, Exception)
 	)
-	total_count = len(art_ids)
-	skipped_count = total_count - saved_count
+	skipped_count = len(art_ids) - new_saved_count
 
-	log.info(f"Artworks data saved to: {ARTWORK_JSONL}")
-	log.info(f"{saved_count} saved, "
-		       f"{skipped_count} skipped, "
-					 f"{total_count} total, "
-					 f"in {time.time() - start_time:.4f} seconds")
+	if ARTWORKS_JSONL.exists():
+		log.info(f"Artworks data saved to: {ARTWORKS_JSONL}")
+		log.info(f"{new_saved_count} new arts saved, "
+						 f"{skipped_count} skipped "
+						 f"in {time.time() - start_time:.4f} seconds")
 
 if __name__ == "__main__":
 	asyncio.run(main())
