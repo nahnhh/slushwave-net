@@ -54,6 +54,12 @@ However, still have to iterate through each *album* site for:
   + Workflow: AlbumScraper -> albums.json -> collect unique art_ids -> ArtworkScraper -> artwork.jsonl
   + Log.info: Saved how many new artworks to `artwork.jsonl` out of X artworks.
 
+- 11/06:
+  + `ALBUMS_CACHE_JSONL` stores {url, mod_date} to compare processed albums to see if there needs updating -> Add fallbacck to `main()` to stop if there is 0 new albums
+  + `ARTWORKS_JSONL` stores {art_id, dom_color, palette, date_fetched}
+  + Need to fix artwork dedup: because unique track art_id are created for every track art uploaded, and since fetching artworks happen concurrently, the first unique art_id is random. -> the list `track_art_id` is random -> need to store hash as well(?)
+
+
 
 ### Teaching myself how to scrape data
 1. **Headers list** to rotate, `tls_client` to fetch url instead of BeautifulSoup's session

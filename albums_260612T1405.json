@@ -31,62 +31,75 @@
     ]
   },
   {
-    "url": "https://desertsand.bandcamp.com/album/--30",
-    "album": "夢の砂漠",
-    "artist": "desert sand feels warm at night",
-    "total_time": "3:52:36",
-    "num_tracks": 8,
+    "url": "https://desertsand.bandcamp.com/album/perli-tal-passat",
+    "album": "Perli tal-Passat",
+    "artist": "desert sand feels warm at night & days of blue skies",
+    "total_time": "2:27:17",
+    "num_tracks": 14,
     "keywords": [
       "Electronic",
       "ambient",
+      "chill",
+      "experimental electronic",
+      "memories",
+      "rain",
       "slushwave",
       "smooth",
       "vaporwave",
       "United Kingdom"
     ],
-    "new_date": "26 Jan 2022 18:25:48 GMT",
-    "publish_date": "04 Feb 2022 17:01:21 GMT",
-    "release_date": "04 Feb 2022 00:00:00 GMT",
-    "mod_date": "08 Sep 2022 11:08:33 GMT",
-    "album_art_id": "2681935442",
+    "new_date": "16 Dec 2024 00:19:06 GMT",
+    "publish_date": "16 Dec 2024 17:49:51 GMT",
+    "release_date": "16 Dec 2024 00:00:00 GMT",
+    "mod_date": "15 Jul 2025 14:55:17 GMT",
+    "album_art_id": "3561606714",
     "track_art_id": [
-      "2681935442"
+      "3561606714"
     ]
   },
   {
-    "url": "https://geometriclullaby.bandcamp.com/album/geo-c07",
-    "album": "GEO - C07; 夕暮れから夜明けまで",
-    "artist": "Illusionary ドリーミング & ネザーnether",
-    "total_time": "5:24:41",
-    "num_tracks": 36,
+    "url": "https://giftsfromhome.bandcamp.com/album/-",
+    "album": "スター",
+    "artist": "Quà từ Nhà",
+    "total_time": "0:15:35",
+    "num_tracks": 2,
     "keywords": [
-      "Electronic",
-      "ambient",
-      "dark ambient",
-      "dreampunk",
-      "dreamtone",
-      "experimental",
-      "hypnagogic",
-      "liminal",
-      "liminal spaces",
-      "post-vaporwave",
-      "slushwave",
-      "vaporwave",
-      "Pittsburgh"
+      "Ambient",
+      "Slushwave",
+      "Vietnam"
     ],
-    "new_date": "28 Nov 2024 03:05:29 GMT",
-    "publish_date": "11 Jul 2025 16:00:08 GMT",
-    "release_date": "11 Jul 2025 00:00:00 GMT",
-    "mod_date": "16 Jul 2025 02:17:10 GMT",
-    "album_art_id": "3195284159",
+    "new_date": "21 Apr 2025 15:32:54 GMT",
+    "publish_date": "08 May 2025 07:14:52 GMT",
+    "release_date": "08 May 2025 00:00:00 GMT",
+    "mod_date": "25 Dec 2025 17:25:56 GMT",
+    "album_art_id": "0658787489",
     "track_art_id": [
-      "0470967808",
-      "0949674429",
-      "3516630582",
-      "2529515307",
-      "0712720415",
-      "2944420340",
-      "2869282147"
+      "0658787489"
+    ]
+  },
+  {
+    "url": "https://noproblematapes.bandcamp.com/album/--89",
+    "album": "ලෝක දෙකක් අතර",
+    "artist": "days of blue skies",
+    "total_time": "2:23:41",
+    "num_tracks": 15,
+    "keywords": [
+      "ambient",
+      "electronic",
+      "experimental",
+      "new york",
+      "slushwave",
+      "smooth",
+      "vaporwave",
+      "Chile"
+    ],
+    "new_date": "16 Dec 2025 02:52:49 GMT",
+    "publish_date": "16 Dec 2025 03:02:51 GMT",
+    "release_date": "13 Feb 2026 00:00:00 GMT",
+    "mod_date": "13 Feb 2026 00:52:05 GMT",
+    "album_art_id": "2569838638",
+    "track_art_id": [
+      "2569838638"
     ]
   },
   {
@@ -149,48 +162,39 @@
     "track_art_id": []
   },
   {
-    "url": "https://giftsfromhome.bandcamp.com/album/-",
-    "album": "スター",
-    "artist": "Quà từ Nhà",
-    "total_time": "0:15:35",
-    "num_tracks": 2,
+    "url": "https://geometriclullaby.bandcamp.com/album/geo-c07",
+    "album": "GEO - C07; 夕暮れから夜明けまで",
+    "artist": "Illusionary ドリーミング & ネザーnether",
+    "total_time": "5:24:41",
+    "num_tracks": 36,
     "keywords": [
-      "Ambient",
-      "Slushwave",
-      "Vietnam"
-    ],
-    "new_date": "21 Apr 2025 15:32:54 GMT",
-    "publish_date": "08 May 2025 07:14:52 GMT",
-    "release_date": "08 May 2025 00:00:00 GMT",
-    "mod_date": "25 Dec 2025 17:25:56 GMT",
-    "album_art_id": "0658787489",
-    "track_art_id": [
-      "0658787489"
-    ]
-  },
-  {
-    "url": "https://noproblematapes.bandcamp.com/album/--89",
-    "album": "ලෝක දෙකක් අතර",
-    "artist": "days of blue skies",
-    "total_time": "2:23:41",
-    "num_tracks": 15,
-    "keywords": [
+      "Electronic",
       "ambient",
-      "electronic",
+      "dark ambient",
+      "dreampunk",
+      "dreamtone",
       "experimental",
-      "new york",
+      "hypnagogic",
+      "liminal",
+      "liminal spaces",
+      "post-vaporwave",
       "slushwave",
-      "smooth",
       "vaporwave",
-      "Chile"
+      "Pittsburgh"
     ],
-    "new_date": "16 Dec 2025 02:52:49 GMT",
-    "publish_date": "16 Dec 2025 03:02:51 GMT",
-    "release_date": "13 Feb 2026 00:00:00 GMT",
-    "mod_date": "13 Feb 2026 00:52:05 GMT",
-    "album_art_id": "2569838638",
+    "new_date": "28 Nov 2024 03:05:29 GMT",
+    "publish_date": "11 Jul 2025 16:00:08 GMT",
+    "release_date": "11 Jul 2025 00:00:00 GMT",
+    "mod_date": "16 Jul 2025 02:17:10 GMT",
+    "album_art_id": "3195284159",
     "track_art_id": [
-      "2569838638"
+      "3591936315",
+      "0379081337",
+      "2529515307",
+      "0964816122",
+      "0290205804",
+      "1385003170",
+      "3516630582"
     ]
   },
   {
