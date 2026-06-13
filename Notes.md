@@ -4,6 +4,9 @@
 [ ] Add other album urls in description/credits to URL scraping queue
 [ ] Change `artworks.jsonl` to `{img_hash, art_id {album1:[art_id], album2:[.]}, ...}`
 [ ] Assign color to node, display all nodes around a color wheel (OKLCH)
+[ ] Add other album urls in description/credits to URL scraping queue
+[ ] Change `artworks.jsonl` to `{img_hash, art_id {album1:[art_id], album2:[.]}, ...}`
+[ ] Assign color to node, display all nodes around a color wheel (OKLCH)
 [ ] HTML & CSS to create the site (neocities)
 
 ### Info to scrape from artist list --> Compile `source.json` file
