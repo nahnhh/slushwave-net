@@ -33,10 +33,11 @@ GOOD_PROFILES = Path("good_profiles.json")
 LINKS_FILE = Path.cwd() / 'slushwave-bandcamp-links.txt'
 ALBUM_MOD_DATES_JSON = Path("album_mod_dates.json")
 ARTWORKS_JSONL =  Path("artworks.jsonl")
-ARTWORK_URL = "https://f4.bcbits.com/img/a{art_id}_3"
 TEST_URL = "https://giftsfromhome.bandcamp.com/album/-"
+ARTWORK_URL = "https://f4.bcbits.com/img/a{art_id}_3"
+ALT_ALBUM_URL = re.compile(r"https://[a-zA-Z0-9-]+\.bandcamp\.com/album/\S+")
 
-#STARTUP TEST PROFILES
+# --- STARTUP TEST PROFILES ---
 async def _test_profile(profile):
 	s = AsyncSession(client_identifier=profile)
 	try:
@@ -59,6 +60,23 @@ async def get_good_profiles():
 		else:
 			good.append(profile)
 	return good, failed
+
+async def get_ok_clients(skip=True):
+	if GOOD_PROFILES.exists():
+		use_cache = skip or (
+			input("Retest client identifiers? [y/N]: ").strip().lower() != "y"
+		)
+		if use_cache:
+			with open(GOOD_PROFILES) as f:
+				return json.load(f)
+
+	log.info("Testing client identifiers...")
+	ok_clients, _ = await get_good_profiles()
+	with open(GOOD_PROFILES, "w") as f:
+		json.dump(ok_clients, f)
+	return ok_clients
+
+# --- TLS CLIENT ASYNC SESSION ---
 
 class BrowserSession:
 	def __init__(self, ok_clients: list):
@@ -99,7 +117,7 @@ class BrowserSession:
 		return resp
 
 
-# FUNCTIONS TO USE
+# --- FUNCTIONS TO USE ---
 def nozero(text: Any) -> str:
 		if text is None:
 				return ""
@@ -132,6 +150,7 @@ def pick_dominant_oklch(palette):
 
 	return max(candidates, key=lambda c: c["c"])
 
+
 class ArtworkScraper:
 	def __init__(self, session_or_clients, sem=150):
 		if isinstance(session_or_clients, BrowserSession):
@@ -157,7 +176,7 @@ class ArtworkScraper:
 		async with self.sem:
 			r = await (self.s.get(ARTWORK_URL.format(art_id=art_id)))
 			img = r.content
-			img_hash = hashlib.blake2b(img,digest_size=8).hexdigest()
+			img_hash = hashlib.blake2b(img,digest_size=8).hexdigest() # type: ignore
 
 			async with self.lock:
 				# Check if img_hash is already in artwork.jsonl
@@ -210,13 +229,13 @@ class AlbumScraper:
 		with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
 			self.mod_dates = json.load(f)
 
-	async def get_release_data(self, url):
+	async def get_track_data(self, url):
 		async with self.sem:
 			r = await self.s.get(url)
 			soup = BeautifulSoup(r.text or "", "lxml")
 
 			try:
-				t_tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum", "{}"))
+				t_tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum", "{}")) # type: ignore
 			except Exception:
 				log.exception(f"Couldn't fetch data-tralbum from {url}")
 				return None
@@ -232,79 +251,113 @@ class AlbumScraper:
 
 			return t_art_id
 
+	def extract_alt_album_urls(self, album_schema):
+		"""Get alternative album urls from labels in description/credits."""
+		text = (
+			(album_schema.get("description") or "") + " " +
+			(album_schema.get("creditText") or "")
+		)
+		links = ALT_ALBUM_URL.findall(text)
+		# dedupe
+		seen = set()
+		result = []
+		for link in links:
+			if link not in seen:
+				seen.add(link)
+				result.append(link)
+
+		return result
+
 	async def scrape_album_page(self, soup) -> Dict[str, Any]:
 		"""Fetch album page and returns all required metadata."""
 		# soup_title = nozero(soup.title.get_text(strip=True))
 		schema = json.loads(soup.select("script[type='application/ld+json']")[0].get_text(strip=True))
-		tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum", "{}"))
+
+		# Find alt urls in description/credits
+		url = schema.get('@id')
+		alt_urls = self.extract_alt_album_urls(schema)
+		if alt_urls:
+			log.info(f"Alternative links found in {url}")
+
+		# Skip no tracks
+		num_tracks = schema.get('numTracks') or 0
+		if int(num_tracks) == 0:
+			log.info(f"Skipping: no tracks in {url}")
+			return None #type: ignore
+
+		# Skip non slushwave releases
+		keywords = schema.get('keywords',[]) or []
+		if "slushwave" not in (k.lower() for k in keywords):
+			log.info(f"Skipping: not a slushwave release {url}")
+			return None #type: ignore
+
+		tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum","{}"))
 		current = tralbum.get('current')
 
-		# Skip stale albums with no update
-		url = schema.get('@id')
+		# Skip stale albums with no updates
 		mod_date = current.get("mod_date") or ""
 		if mod_date == self.mod_dates.get(url):
 			log.info(f"Skipping: no updates for {url}")
-			return None
+			return None # type: ignore
 		self.mod_dates[url] = mod_date
 
-		# LD+JSON: album name, artist, number of tracks, keywords/tags
+		# LD+JSON: album name, artist
 		album_name = nozero((schema['name'] or current['title'] or ""))
 		artist_name = nozero((schema['byArtist']['name'] or current['artist'] or ""))
-		keywords = schema.get("keywords",[]) or []
-		track_art_id = []
 
 		# Total time: Check for number of tracks before computing
-		total_time = timedelta(0)
-		num_tracks = schema.get("numTracks") or current.get("track_count") or 0
-		if int(num_tracks) > 0:
-			track_info = tralbum.get('trackinfo')
-			track_durs = [t['duration'] for t in track_info]
-			total_time = timedelta(seconds=int(sum(track_durs)))
+		track_durs = [t['duration'] for t in tralbum.get('trackinfo')]
+		runtime = timedelta(seconds=int(sum(track_durs)))
 
-			# All track data
-			track_urls = [t['item']['@id'] for t in schema["track"]["itemListElement"]]
-			for coro in asyncio.as_completed(self.get_release_data(url) for url in track_urls):
-				result = await coro
-				if not result:
-					continue
-				t_art_id = result
-				track_art_id.append(t_art_id)
+		# All track data (t_art_id)
+		track_art_id = []
+		track_urls = [t['item']['@id'] for t in schema['track']['itemListElement']]
+		for coro in asyncio.as_completed(self.get_track_data(url) for url in track_urls):
+			result = await coro
+			if not result:
+				continue
+			t_art_id = result
+			track_art_id.append(t_art_id)
 
 		result = {
 				"url": url,
+				"album_id": tralbum['id'],
 				"album": album_name,
 				"artist": artist_name,
-				"total_time": str(total_time),
+				"runtime": str(runtime),
 				"num_tracks": int(num_tracks),
 				"keywords": keywords,
-				"new_date": current.get("new_date") or "",
-				"publish_date": current.get("publish_date") or "",
-				"release_date": current.get("release_date") or "",				
+				"new_date": current.get('new_date') or "",
+				"publish_date": current.get('publish_date') or "",
+				"release_date": current.get('release_date') or "",				
 				"mod_date": mod_date,
-				"album_art_id": str(current.get("art_id")).zfill(10),
+				"album_art_id": str(current.get('art_id')).zfill(10),
 				"track_art_id": track_art_id,
 		}
 
 		return result
 
+def extract_album_urls(music_page_soup, artist_url=None):
+	"""Extract all album urls from the artist's Music page"""
+	if not artist_url:
+		artist_url = music_page_soup.select_one('meta[property="og:url"]').get('content')
+	links = (
+		music_page_soup.select("li.music-grid-item a[href]")
+		or music_page_soup.select("div.ipCellImage a[href]")
+	)
+	albums = []
+	for a in links:
+		href = a["href"]
+		if href.startswith("http"):
+			albums.append(href)
+		else:
+			albums.append(artist_url.rstrip("/") + href)
+
+	return albums
+
 # ====================================
 # OKAY!!! LET'S GET THIS THING RUNNING
 # ====================================
-
-async def get_ok_clients(skip=True):
-	if GOOD_PROFILES.exists():
-		use_cache = skip or (
-			input("Retest client identifiers? [y/N]: ").strip().lower() != "y"
-		)
-		if use_cache:
-			with open(GOOD_PROFILES) as f:
-				return json.load(f)
-
-	log.info("Testing client identifiers...")
-	ok_clients, _ = await get_good_profiles()
-	with open(GOOD_PROFILES, "w") as f:
-		json.dump(ok_clients, f)
-	return ok_clients
 
 async def main():
 	ok_clients = await get_ok_clients(skip=True)

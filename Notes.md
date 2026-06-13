@@ -18,11 +18,25 @@ However, still have to iterate through each *album* site for:
 
 ### Log
 #### 12/06/26: `parse_album_page.py` is done
+- Workflow of `parse_album_page`: Skip no tracks -> Skip non slushwave -> Skip no updates -> Append result -> Scrape alt album urls from label if any
+  + Skip no tracks -> Find all unique urls that has '/album/', in schema['description'] or schema['creditText'] -> Scrape those urls (?)
 - Work on `parse_music_page` -> get all album urls and aliases, should be fast :D
-- 
+- The slushwave artist list is too extensive, only add data from releases that has slushwave in keywords`.lower()`
+- Future: JSON - Function to look up art_id from `albums.json` in `artworks.jsonl` -> return only existing art_ids in order of tracks(?)
+- Future: JSON - Filter to remove artists whose slushwave releases make up < 10% of their catalog -> get no. slushwave releases / total releases
+  1. Scrape music page.
+  2. Collect album URLs (`f"page+{.get('href')}"`) + alias (`"artist-override"`) in `select_all("music-grid-item")`
+  3. Fetch album pages with `parse_album_page.py`, BUT:
+  4. Extract tags = `keywords.lower()` for every release.
+  5. Only do full metadata extraction for releases tagged with slushwave.
+  6. Calculate slushwave releases / total releases percentage.
+
+- Todo: `artwork.jsonl`: `{img_hash, art_id: [], dom_color, palette, date_fetched}`
+-> List of art_id allows for instances where the same image gets uploaded in different albums
+-> This will also include same track art uploaded across multiple tracks
 
 #### 11/06/26:
-  + `ALBUMS_CACHE_JSONL` stores {url, mod_date} to compare processed albums to see if there needs updating -> Add fallbacck to `main()` to stop if there is 0 new albums
+  + `ALBUMS_CACHE_JSONL` stores {url, mod_date} to compare processed albums to see if there needs updating -> Add fallback to `main()` to stop if there is 0 new albums
   + `ARTWORKS_JSONL` stores {art_id, dom_color, palette, date_fetched}
   + Need to fix artwork dedup: because unique track art_id are created for every track art uploaded, and since fetching artworks happen concurrently, the first unique art_id is random. -> the list `track_art_id` is random -> need to store hash as well(?)
 
