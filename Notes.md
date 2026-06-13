@@ -1,7 +1,9 @@
 ### Things to do
 [x] Create a Python script to scrape source data from the list: artist, album, year, image -> albums.json
 [x] Use `color-thief-py` to get dominant color of album -> artworks.json
-[ ] Assign color to node, display all nodes around a color wheel (OKLCH).
+[ ] Add other album urls in description/credits to URL scraping queue
+[ ] Change `artworks.jsonl` to `{img_hash, art_id {album1:[art_id], album2:[.]}, ...}`
+[ ] Assign color to node, display all nodes around a color wheel (OKLCH)
 [ ] HTML & CSS to create the site (neocities)
 
 ### Info to scrape from artist list --> Compile `source.json` file
@@ -17,6 +19,32 @@ However, still have to iterate through each *album* site for:
 - runtime
 
 ### Log
+#### 13/06/26: New workflow for `parse_album_page` - `main()`
+1. URL Discovery: URL -> soup -> url, schema, tralbum -> pass to `extract_alt_album_urls(schema)` -> `queue.put_nowait(alt_url)` -> store to `parsed_pages[url] = {schema, album}
+2. Pass to `scrape_album_page(schema, tralbum)` to check skips and get album data
+3. Pass to `scrape_many(art_ids)` to get artwork 
+
+URL discovery and album parsing happen together. Track parsing happens after.
+Queue
+ ↓
+album URL
+
+worker:
+    fetch album page
+    parse schema/tralbum
+    discover alt URLs
+    enqueue alt URLs
+    scrape_album_page(schema,tralbum)
+    return album_data
+
+main:
+    gather album_data
+    collect art_ids
+
+after crawl:
+    scrape_many(art_ids)
+
+
 #### 12/06/26: `parse_album_page.py` is done
 - Workflow of `parse_album_page`: Skip no tracks -> Skip non slushwave -> Skip no updates -> Append result -> Scrape alt album urls from label if any
   + Skip no tracks -> Find all unique urls that has '/album/', in schema['description'] or schema['creditText'] -> Scrape those urls (?)
