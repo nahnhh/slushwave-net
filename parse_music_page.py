@@ -49,7 +49,7 @@ async def _test_profile(profile):
 	except Exception:
 		return profile, True
 	
-async def get_good_profiles():
+async def _get_good_profiles():
 	tasks = [_test_profile(profile) for profile in FINGERPRINTS]
 	results = await asyncio.gather(*tasks, return_exceptions=False)
 	failed = []
@@ -71,7 +71,7 @@ async def get_ok_clients(skip=True):
 				return json.load(f)
 
 	log.info("Testing client identifiers...")
-	ok_clients, _ = await get_good_profiles()
+	ok_clients, _ = await _get_good_profiles()
 	with open(GOOD_PROFILES, "w") as f:
 		json.dump(ok_clients, f)
 	return ok_clients
@@ -271,13 +271,13 @@ class AlbumScraper:
 	async def scrape_album_page(self, soup) -> Dict[str, Any]:
 		"""Fetch album page and returns all required metadata."""
 		# soup_title = nozero(soup.title.get_text(strip=True))
-		schema = json.loads(soup.select("script[type='application/ld+json']")[0].get_text(strip=True))
+		schema = json.loads(soup.select_one("script[type='application/ld+json']").get_text(strip=True))
 
 		# Find alt urls in description/credits
 		url = schema.get('@id')
 		alt_urls = self.extract_alt_album_urls(schema)
 		if alt_urls:
-			log.info(f"Alternative links found in {url}")
+			log.info(f"{len(alt_urls)} other album url found in {url}")
 
 		# Skip no tracks
 		num_tracks = schema.get('numTracks') or 0
@@ -335,7 +335,10 @@ class AlbumScraper:
 				"track_art_id": track_art_id,
 		}
 
-		return result
+		return {
+			"album": result,
+			"alt_urls": alt_urls,
+		}
 
 def extract_album_urls(music_page_soup, artist_url=None):
 	"""Extract all album urls from the artist's Music page"""
@@ -364,11 +367,12 @@ async def main():
 
 	urls = [
 		'https://giftsfromhome.bandcamp.com/album/-',
-		'https://daysofblue.bandcamp.com/album/--12',
-		'https://noproblematapes.bandcamp.com/album/--89',
-		'https://geometriclullaby.bandcamp.com/album/geo-c07',
 		'https://desertsand.bandcamp.com/album/vja-tal-qalb',
 		'https://blackmoon00.bandcamp.com/album/-',
+		'https://daysofblue.bandcamp.com/album/--12',
+		'https://noproblematapes.bandcamp.com/album/--89',
+		'https://nethervapor.bandcamp.com/album/--10',
+		'https://geometriclullaby.bandcamp.com/album/geo-c07',
 		'https://desertsand.bandcamp.com/album/perli-tal-passat',
 		'https://delusivemystery.bandcamp.com/album/--12'
 	]
@@ -381,40 +385,53 @@ async def main():
 	artwork_scraper = ArtworkScraper(s, sem=150)
 	album_scraper.load_cache()
 	artwork_scraper.load_cache()
-	failed_urls = set()
-	soups = []
 	albums = []
 	art_ids = set()
+	failed_urls = set()
+	pending_urls = set(urls)
+	seen_urls = set()
 
 	async def fetch(url):
 		r = await s.get(url)
 		soup = BeautifulSoup(r.text or "", "lxml")
-		return url, soup
+		return soup
 
 	start_time = time.time()
-	for task in asyncio.as_completed(fetch(url) for url in urls):
+
+	while pending_urls:
+		url = pending_urls.pop()
+		if url in seen_urls:
+			continue
+		seen_urls.add(url)
 		try:
-			url, soup = await task
-			if soup.title and soup.title.get_text(strip=True) == "Client Challenge": # type: ignore
+			soup = await fetch(url)
+			if soup.title and soup.title.get_text(strip=True) == "Client Challenge":
 				failed_urls.add(url)
-				log.warning(f"Client Challenge with {s.client_identifier} - Couldn't fetch {url}")
+				log.warning(
+					f"Client Challenge with {s.client_identifier} - Couldn't fetch {url}"
+				)
 				s.new_session()
 				continue
-			soups.append(soup)
+
+			parsed = await album_scraper.scrape_album_page(soup)
+			if not parsed:
+				continue
+			album_data = parsed["album"]
+			albums.append(album_data)
+			art_ids.add(album_data["album_art_id"])
+			art_ids.update(album_data["track_art_id"])
+
+			# Add newly discovered URLs
+			pending_urls.update(
+				u for u in parsed["alt_urls"]
+				if u not in seen_urls
+			)
+
 		except Exception:
-			log.exception("Fetch failed for whatever reason :(")
+			log.exception(f"Failed processing {url}")
 
-	log.info(f"{len(soups)} albums fetched in {time.time() - start_time:.4f} seconds")
-	start_time = time.time()
+	log.info(f"{len(albums)} albums fetched in {time.time() - start_time:.4f} seconds")
 
-	for soup in tqdm(soups, desc="Fetching albums"):
-		album_data = await album_scraper.scrape_album_page(soup)
-		if not album_data:
-			continue
-		albums.append(album_data)
-		art_ids.add(album_data["album_art_id"])
-		art_ids.update(album_data["track_art_id"])
-	
 	if not albums:
 		log.info("No new or updated albums found. Exiting.")
 		return

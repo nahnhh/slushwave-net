@@ -20,6 +20,7 @@ However, still have to iterate through each *album* site for:
 #### 12/06/26: `parse_album_page.py` is done
 - Workflow of `parse_album_page`: Skip no tracks -> Skip non slushwave -> Skip no updates -> Append result -> Scrape alt album urls from label if any
   + Skip no tracks -> Find all unique urls that has '/album/', in schema['description'] or schema['creditText'] -> Scrape those urls (?)
+  + If `album_scraper.load_cache()`, `json.dump` writes only new updated albums -> Create a master `albums.json`, merge updates
 - Work on `parse_music_page` -> get all album urls and aliases, should be fast :D
 - The slushwave artist list is too extensive, only add data from releases that has slushwave in keywords`.lower()`
 - Future: JSON - Function to look up art_id from `albums.json` in `artworks.jsonl` -> return only existing art_ids in order of tracks(?)
