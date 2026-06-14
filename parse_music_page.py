@@ -30,16 +30,16 @@ logging.basicConfig(
 log = logging.getLogger('rich')
 
 GOOD_PROFILES = Path("good_profiles.json")
-LINKS_FILE = Path.cwd() / 'slushwave-bandcamp-links.txt'
+LINKS_FILE = Path("slushwave-bandcamp-links.txt")
 ALBUM_MOD_DATES_JSON = Path("album_mod_dates.json")
 ARTWORKS_JSONL =  Path("artworks.jsonl")
 TEST_URL = "https://giftsfromhome.bandcamp.com/album/-"
 ARTWORK_URL = "https://f4.bcbits.com/img/a{art_id}_3"
-ALT_ALBUM_URL = re.compile(r"https://[a-zA-Z0-9-]+\.bandcamp\.com/album/\S+")
+ALBUM_URL = re.compile(r"https://[a-zA-Z0-9-]+\.bandcamp\.com/album/\S+")
 
 # --- STARTUP TEST PROFILES ---
 class ClientChallenge(Exception):
-    pass
+		pass
 
 async def _test_profile(profile):
 	s = AsyncSession(client_identifier=profile)
@@ -116,17 +116,36 @@ class BrowserSession:
 				self.new_session()
 				self.requests_made = 0
 				self.retire_after = random.randint(40, 100)
-			s = self.session
+			session = self.session
 			self.requests_made += 1
-		return await s.get(url,**kwargs)
+		return await session.get(url,**kwargs)
+	
+	async def fetch(self, url):
+		"""Fetch soup from url + Client Challenge exception"""
+		try:
+			r = await self.get(url)
+			soup = BeautifulSoup(r.text or "", "lxml")
+			title = soup.title.get_text(strip=True) if soup.title else ""
+			if title == "Client Challenge":
+				raise ClientChallenge
+			return soup
+		except ClientChallenge:
+			log.warning(f"Client Challenge with {self.client_identifier} - Couldn't fetch {url}")
+			return None
+		except Exception:
+			log.exception(f"Failed: {url}")
+			return None
 
 
 # --- FUNCTIONS TO USE ---
+def unique(input_list):
+	return list(set(input_list))
+
 def nozero(text: Any) -> str:
-		if text is None:
-				return ""
-		text = str(text)
-		return re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)
+	if text is None:
+		return ""
+	text = str(text)
+	return re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)
 
 def rgb_to_oklch(rgb):
 	r, g, b = rgb
@@ -224,57 +243,71 @@ class AlbumScraper:
 		self.seen_art_id = set()
 		self.seen_hash = set()
 		self.lock = asyncio.Lock()
+		self.album_urls = set()
+		self.processed_urls = set()
 	
-	# Check mod date to see if album has been updated
-	def load_cache(self):
-		if not ALBUM_MOD_DATES_JSON.exists():
-			return	
+	# --- 0. Read from artist list -> music page soup -> album urls ---
+	async def fetch_albums_from_artist(self, artist_url) -> set[str]:
+		"""Get response & soup from Music page -> extract album urls"""
+		artist_url = artist_url.rstrip("/")
+		soup = await self.s.fetch(artist_url)
+		if soup is None:
+			return set()
+		links = (
+			soup.select("li.music-grid-item a[href]")
+			or soup.select("div.ipCellImage a[href]")
+		)
 
-		with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
-			self.mod_dates = json.load(f)
+		album_urls = {
+				href if href.startswith("http")
+				else artist_url + href
+				for href in (a["href"] for a in links)
+		}
+		return album_urls
 
-	async def get_track_data(self, url):
-		async with self.sem:
-			r = await self.s.get(url)
-			soup = BeautifulSoup(r.text or "", "lxml")
-
-			try:
-				t_tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum", "{}")) # type: ignore
-			except Exception:
-				log.exception(f"Couldn't fetch data-tralbum from {url}")
-				return None
-
-			# --- art id checks ---
-			t_art_id = str(t_tralbum.get('art_id')).zfill(10)
-
-			async with self.lock:
-				# Check for cached art ids
-				if t_art_id in self.seen_art_id:
-					return None
-				self.seen_art_id.add(t_art_id)
-
-			return t_art_id
-
+	async def get_all_album_urls(self, file=LINKS_FILE):
+		"""
+		Get all album urls from a .txt file with all links listed.
+			+) Music (artist) page url -> music soup -> extract album urls, update to result
+			+) Album page url -> skip
+		"""
+		with open(file, "r", encoding="utf-8") as f:
+			urls = {line.strip() for line in f if line.strip()}
+		album_urls = {url for url in urls if ALBUM_URL.match(url)}
+		artist_urls = urls - album_urls
+		url_lists = await asyncio.gather(
+			*(self.fetch_albums_from_artist(url) for url in artist_urls),
+			return_exceptions=False
+		)
+		album_urls.update(album_url for urls in url_lists for album_url in urls)
+		self.album_urls.update(album_urls)
+	
+	# --- 1. Read album urls -> album page soup -> alt album urls + album data ---
 	def extract_alt_album_urls(self, album_schema):
-		"""Get alternative album urls from labels in description/credits."""
+		"""Get other album urls in description/credits -> Update to {album_urls}"""
+		url = album_schema.get('@id')
 		text = (
 			(album_schema.get("description") or "") + " " +
 			(album_schema.get("creditText") or "")
 		)
-		links = ALT_ALBUM_URL.findall(text)
-		# dedupe
-		seen = set()
-		result = []
-		for link in links:
-			if link not in seen:
-				seen.add(link)
-				result.append(link)
-
-		return result
+		alt_urls = ALBUM_URL.findall(text)
+		if alt_urls:
+			log.info(f"{len(alt_urls)} other album url found in {url}")
+		self.album_urls.update(alt_urls)
+	
+	def load_cache(self):
+		"""Load {url: mod_date}"""
+		if not ALBUM_MOD_DATES_JSON.exists():
+			return	
+		with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
+			self.mod_dates = json.load(f)
 
 	async def scrape_album_page(self, schema, tralbum) -> Dict[str, Any]:
 		"""Fetch album page and returns all required metadata."""
-		# soup_title = nozero(soup.title.get_text(strip=True))
+		while True:
+			to_process = album_scraper.album_urls - album_scraper.processed_urls
+			if not to_process:
+				break
 		# schema = json.loads(soup.select_one("script[type='application/ld+json']").get_text(strip=True))
 
 		# Find alt urls in description/credits
@@ -314,18 +347,17 @@ class AlbumScraper:
 		runtime = timedelta(seconds=int(sum(track_durs)))
 
 		# All track data (t_art_id)
-		track_art_id = []
+		# track_art_id = []
 		track_urls = [t['item']['@id'] for t in schema['track']['itemListElement']]
-		for coro in asyncio.as_completed(self.get_track_data(url) for url in track_urls):
-			result = await coro
-			if not result:
-				continue
-			t_art_id = result
-			track_art_id.append(t_art_id)
+		# for coro in asyncio.as_completed(self.get_track_data(url) for url in track_urls):
+		# 	result = await coro
+		# 	if not result:
+		# 		continue
+		# 	t_art_id = result
+		# 	track_art_id.append(t_art_id)
 
 		result = {
 				"url": url,
-				"album_id": tralbum['id'],
 				"album": album_name,
 				"artist": artist_name,
 				"runtime": str(runtime),
@@ -335,29 +367,12 @@ class AlbumScraper:
 				"publish_date": current.get('publish_date') or "",
 				"release_date": current.get('release_date') or "",				
 				"mod_date": mod_date,
-				"album_art_id": str(current.get('art_id')).zfill(10),
-				"track_art_id": track_art_id,
+				"album_id": tralbum['id'],
+				"album_art_id": current.get('art_id'),
+				"track_urls": track_urls,
 		}
 
 		return result
-
-def extract_album_urls(music_page_soup, artist_url=None):
-	"""Extract all album urls from the artist's Music page"""
-	if not artist_url:
-		artist_url = music_page_soup.select_one('meta[property="og:url"]').get('content')
-	links = (
-		music_page_soup.select("li.music-grid-item a[href]")
-		or music_page_soup.select("div.ipCellImage a[href]")
-	)
-	albums = []
-	for a in links:
-		href = a["href"]
-		if href.startswith("http"):
-			albums.append(href)
-		else:
-			albums.append(artist_url.rstrip("/") + href)
-
-	return albums
 
 # ====================================
 # OKAY!!! LET'S GET THIS THING RUNNING
@@ -430,7 +445,7 @@ async def main():
 					album_data = parsed["album"]
 					albums.append(album_data)
 					art_ids.add(album_data["album_art_id"])
-					art_ids.update(album_data["track_art_id"])
+					art_ids.update(album_data["track_urls"])
 					for new_url in parsed["alt_urls"]:
 						should_enqueue = False
 
