@@ -139,7 +139,7 @@ class BrowserSession:
 			log.warning(f"Client Challenge with {self.client_identifier} - Couldn't fetch {url}")
 			return None
 		except IsntHere:
-			log.info(f"SKIPPING: Page isn't here {url}")
+			log.info(f"SKIP: Page isn't here {url}")
 			return None
 		except Exception:
 			log.exception(f"Failed: {url}")
@@ -189,7 +189,6 @@ class ArtworkScraper:
 			self.s = session_or_clients
 		else:
 			self.s = BrowserSession(session_or_clients, sem)
-		self.sem = asyncio.Semaphore(sem)
 		self.lock = asyncio.Lock()
 		self.seen_hash = set()
 
@@ -248,8 +247,7 @@ class AlbumScraper:
 		if isinstance(session_or_clients, BrowserSession):
 			self.s = session_or_clients
 		else:
-			self.s = BrowserSession(session_or_clients, sem=sem)
-		# self.lock = asyncio.Lock()
+			self.s = BrowserSession(session_or_clients, sem)
 		self.mod_dates = {}
 		self.album_urls = set()
 
@@ -315,25 +313,26 @@ class AlbumScraper:
 	async def _scrape_album_page(self, url) -> dict:
 		"""
 		Fetch an album page, checks all skips and returns required album metadata.
-		Get alt album urls -> Skips not slushwave -> no tracks -> stale albums.
+		Skips not slushwave -> Get alt album urls -> Skip no tracks -> Skip stale albums.
 		"""
 		try:
 			soup = await self.s.fetch(url)
 			if not soup:
 				return {}
 			schema = json.loads(soup.select_one("script[type='application/ld+json']").get_text(strip=True)) # type: ignore
-			self._get_alt_album_urls(schema, url)
 
 			# Skip non slushwave releases
-			keywords = schema.get('keywords',[]) or []
-			if "slushwave" not in (k.lower() for k in keywords):
-				log.info(f"SKIPPING: Not a slushwave release {url}")
+			kw = {k.lower() for k in schema.get('keywords',[])}
+			if not kw & {"slushwave"}:
+				log.info(f"SKIP: Not slushwave {url}")
 				return {}
+
+			self._get_alt_album_urls(schema, url)
 
 			# Skip no tracks
 			num_tracks = schema.get('numTracks') or 0
 			if int(num_tracks) == 0:
-				log.info(f"SKIPPING: No tracks in {url}")
+				log.info(f"SKIP: No tracks in {url}")
 				return {}
 			
 			tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum","{}")) # type: ignore
@@ -342,17 +341,16 @@ class AlbumScraper:
 			# Skip stale albums with no updates
 			mod_date = current.get("mod_date") or ""
 			if mod_date == self.mod_dates.get(url):
-				log.info(f"SKIPPING: No updates for {url}")
+				log.info(f"SKIP: No updates for {url}")
 				return {}
 			self.mod_dates[url] = mod_date
 
 			# Get album metadata (finally)
 			album_name = nozero((schema['name'] or current['title'] or ""))
 			artist_name = nozero((schema['byArtist']['name'] or current['artist'] or ""))
-			track_urls = [t['item']['@id'] for t in schema['track']['itemListElement']]
-			runtime = timedelta(seconds=int(
-				sum(t.get('duration', 0) for t in tralbum.get('trackinfo', []))
-				))
+			track_info = tralbum.get('trackinfo')
+			track_urls = [t.get('title_link') for t in track_info]
+			runtime = timedelta(seconds=int(sum(t.get('duration', 0) for t in track_info)))
 
 			result = {
 					"url": url,
@@ -408,8 +406,7 @@ class AlbumScraper:
 				log.info("No new or updated albums found. Exiting.")
 			log.info(
 				f"Finished in {time.time() - start_time:.4f} seconds: "
-				f"{len(results)} albums, "
-				f"{len(processed_urls)} URLs"
+				f"{len(processed_urls)} URLs -> {len(results)} albums"
 			)
 		return results
 
@@ -426,8 +423,6 @@ async def main():
 	# ---- SCRAPING ALBUMS ----
 	album_scraper = AlbumScraper(s, sem=150)
 	# album_scraper.load_cache()
-	# artwork_scraper = ArtworkScraper(s, sem=150)
-	# artwork_scraper.load_cache()
 
 	log.info(f"Fetching album urls...")
 	urls = 'seed_urls.txt'
@@ -443,9 +438,10 @@ async def main():
 	with open(ALBUM_MOD_DATES_JSON, "w", encoding="utf-8") as f:
 		json.dump(album_scraper.mod_dates,f,ensure_ascii=False,indent=2)
 	log.info(f"Albums data saved to: {results_file}")
-	log.info(f"Total time: {time.time() - start_time:.4f} seconds")
 
 	# ---- SCRAPING ARTWORKS ----
+	# artwork_scraper = ArtworkScraper(s, sem=150)
+	# artwork_scraper.load_cache()
 	# artworks = await artwork_scraper.scrape_many(art_ids)
 
 	# new_saved_count = sum(
@@ -459,6 +455,8 @@ async def main():
 	# 	log.info(f"{new_saved_count} new arts saved, "
 	# 			f"{skipped_count} skipped "
 	# 			f"in {time.time() - start_time:.4f} seconds")
+
+	log.info(f"Total time: {time.time() - start_time:.4f} seconds")
 
 if __name__ == "__main__":
 	asyncio.run(main())
