@@ -185,16 +185,18 @@ def pick_dominant_oklch(palette):
 
 
 class ArtworkScraper:
-	def __init__(self, session_or_clients, sem=150):
+	def __init__(self, session_or_clients, sem=150, use_cache=True):
 		if isinstance(session_or_clients, BrowserSession):
 			self.s = session_or_clients
 		else:
 			self.s = BrowserSession(session_or_clients, sem)
 		self.lock = asyncio.Lock()
 		self.seen_hash = set()
+		self.use_cache = use_cache
 
 	def load_cache(self):
-		if not ARTWORKS_JSONL.exists():
+		"""Load image hashes to dedup later."""
+		if not self.use_cache or not ARTWORKS_JSONL.exists():
 			return
 		with open(ARTWORKS_JSONL, "r", encoding="utf-8") as f:
 			for line in f:
@@ -243,23 +245,23 @@ class ArtworkScraper:
 # --- PHASE (0) URL DISCOVERY + (1) PARSE ALBUM DATA ---
 # --- Artist urls (Music pages) list -> Music page soup -> Album urls -> Album soup -> schema, tralbum -> Album data + Track urls ---
 class AlbumScraper:
-	def __init__(self, session_or_clients, sem=150, load_cache=False):
+	def __init__(self, session_or_clients, sem=150, use_cache=False):
 		if isinstance(session_or_clients, BrowserSession):
 			self.s = session_or_clients
 		else:
 			self.s = BrowserSession(session_or_clients, sem)
 		self.mod_dates = {}
 		self.album_urls = set()
-		self.has_cache = load_cache
+		self.use_cache = use_cache
 
-	def load_cache(self, skip=False):
+	def load_cache(self):
 		"""Load {url: mod_date} to check for stale albums later."""
-		if skip or not ALBUM_MOD_DATES_JSON.exists():
-			self.has_cache = False
+		if not self.use_cache:
+			return
+		if not ALBUM_MOD_DATES_JSON.exists():
 			return
 		with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
 			self.mod_dates = json.load(f)
-		self.has_cache = True
 
 	# --- 0. Read from artist list -> music page soup -> album urls ---
 	async def _fetch_albums_from_artist(self, artist_url) -> set[str]:
@@ -414,7 +416,7 @@ class AlbumScraper:
 		return results
 	
 	def save_results(self, results):
-		if self.has_cache:
+		if self.use_cache:
 			with open(ALBUMS_JSONL, "a", encoding="utf-8") as f:
 				for album in results:
 					f.write(json.dumps(album, ensure_ascii=False) + "\n")
@@ -439,7 +441,7 @@ async def main():
 	s = BrowserSession(ok_clients=ok_clients)
 
 	# ---- SCRAPING ALBUMS ----
-	album_scraper = AlbumScraper(s, sem=150, load_cache=False)
+	album_scraper = AlbumScraper(s, sem=150, use_cache=False)
 
 	log.info(f"Fetching album urls...")
 	urls = 'seed_urls.txt'
