@@ -32,6 +32,7 @@ log = logging.getLogger('rich')
 GOOD_PROFILES = Path("good_profiles.json")
 LINKS_FILE = "slushwave-bandcamp-links.txt"
 ALBUM_MOD_DATES_JSON = Path("album_mod_dates.json")
+ALBUMS_JSONL = Path("albums.jsonl")
 ARTWORKS_JSONL =  Path("artworks.jsonl")
 TEST_URL = "https://giftsfromhome.bandcamp.com/album/-"
 ARTWORK_URL = "https://f4.bcbits.com/img/a{art_id}_3"
@@ -195,7 +196,6 @@ class ArtworkScraper:
 	def load_cache(self):
 		if not ARTWORKS_JSONL.exists():
 			return
-
 		with open(ARTWORKS_JSONL, "r", encoding="utf-8") as f:
 			for line in f:
 				try:
@@ -243,20 +243,23 @@ class ArtworkScraper:
 # --- PHASE (0) URL DISCOVERY + (1) PARSE ALBUM DATA ---
 # --- Artist urls (Music pages) list -> Music page soup -> Album urls -> Album soup -> schema, tralbum -> Album data + Track urls ---
 class AlbumScraper:
-	def __init__(self, session_or_clients, sem=150):
+	def __init__(self, session_or_clients, sem=150, load_cache=False):
 		if isinstance(session_or_clients, BrowserSession):
 			self.s = session_or_clients
 		else:
 			self.s = BrowserSession(session_or_clients, sem)
 		self.mod_dates = {}
 		self.album_urls = set()
+		self.has_cache = load_cache
 
-	def load_cache(self):
+	def load_cache(self, skip=False):
 		"""Load {url: mod_date} to check for stale albums later."""
-		if not ALBUM_MOD_DATES_JSON.exists():
-			return	
+		if skip or not ALBUM_MOD_DATES_JSON.exists():
+			self.has_cache = False
+			return
 		with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
 			self.mod_dates = json.load(f)
+		self.has_cache = True
 
 	# --- 0. Read from artist list -> music page soup -> album urls ---
 	async def _fetch_albums_from_artist(self, artist_url) -> set[str]:
@@ -322,8 +325,8 @@ class AlbumScraper:
 			schema = json.loads(soup.select_one("script[type='application/ld+json']").get_text(strip=True)) # type: ignore
 
 			# Skip non slushwave releases
-			kw = {k.lower() for k in schema.get('keywords',[])}
-			if not kw & {"slushwave"}:
+			keywords = schema.get('keywords',[])
+			if not {k.lower() for k in keywords} & {"slushwave"}:
 				log.info(f"SKIP: Not slushwave {url}")
 				return {}
 
@@ -363,7 +366,7 @@ class AlbumScraper:
 					"publish_date": current.get('publish_date') or "",
 					"release_date": current.get('release_date') or "",				
 					"mod_date": mod_date,
-					"album_id": tralbum['id'],
+					"album_id": tralbum.get('id'),
 					"album_art_id": current.get('art_id'),
 					"track_urls": track_urls,
 			}
@@ -409,6 +412,21 @@ class AlbumScraper:
 				f"{len(processed_urls)} URLs -> {len(results)} albums"
 			)
 		return results
+	
+	def save_results(self, results):
+		if self.has_cache:
+			with open(ALBUMS_JSONL, "a", encoding="utf-8") as f:
+				for album in results:
+					f.write(json.dumps(album, ensure_ascii=False) + "\n")
+			log.info(f"Append: Added {len(results)} to {ALBUMS_JSONL}")
+		else:
+			with open(ALBUMS_JSONL, "w", encoding="utf-8") as f:
+				for album in results:
+					f.write(json.dumps(album, ensure_ascii=False) + "\n")
+			log.info(f"Override: Saved {len(results)} to {ALBUMS_JSONL}")
+
+		with open(ALBUM_MOD_DATES_JSON, "w", encoding="utf-8") as f:
+			json.dump(self.mod_dates,f,ensure_ascii=False,indent=2)
 
 # ====================================
 # OKAY!!! LET'S GET THIS THING RUNNING
@@ -421,23 +439,16 @@ async def main():
 	s = BrowserSession(ok_clients=ok_clients)
 
 	# ---- SCRAPING ALBUMS ----
-	album_scraper = AlbumScraper(s, sem=150)
-	# album_scraper.load_cache()
+	album_scraper = AlbumScraper(s, sem=150, load_cache=False)
 
 	log.info(f"Fetching album urls...")
 	urls = 'seed_urls.txt'
 	await album_scraper.get_all_album_urls(urls)
-	albums = await album_scraper.scrape_all_albums()
-	if not albums:
+	results = await album_scraper.scrape_all_albums()
+	if not results:
 		log.info("No new or updated albums found. Exiting.")
 		return
-	timestamp = datetime.now().strftime("%y%m%dT%H%M")
-	results_file = Path(f"albums_{timestamp}.json")
-	with open(results_file, "w", encoding="utf-8") as f:
-			json.dump(albums, f, indent=2, ensure_ascii=False)
-	with open(ALBUM_MOD_DATES_JSON, "w", encoding="utf-8") as f:
-		json.dump(album_scraper.mod_dates,f,ensure_ascii=False,indent=2)
-	log.info(f"Albums data saved to: {results_file}")
+	album_scraper.save_results(results)
 
 	# ---- SCRAPING ARTWORKS ----
 	# artwork_scraper = ArtworkScraper(s, sem=150)
