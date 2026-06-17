@@ -378,9 +378,9 @@ class AlbumScraper:
 
 	def _load_cache(self):
 		"""Load {url: mod_date} to check for stale albums later."""
-		if not self.use_cache or not ALBUMS_JSONL.exists():
+		if not self.use_cache or not ALBUM_MOD_DATES_JSON.exists():
 			return
-		with open(ALBUMS_JSONL, "r", encoding="utf-8") as f:
+		with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
 			self.mod_dates = json.load(f)
 
 	# --- 0. Read from artist list -> music page soup -> album urls ---
@@ -468,7 +468,6 @@ class AlbumScraper:
 			if mod_date == self.mod_dates.get(url):
 				log.info(f"SKIP: No updates for {url}")
 				return {}
-			self.mod_dates[url] = mod_date
 
 			# Get album metadata (finally)
 			release = nozero((schema['name'] or current['title'] or ""))
@@ -477,6 +476,7 @@ class AlbumScraper:
 			track_urls = [t.get('title_link') for t in track_info]
 			runtime = timedelta(seconds=int(sum(t.get('duration', 0) for t in track_info)))
 
+			self.mod_dates[url] = mod_date
 			return {
 					"album_id": tralbum.get('id'),
 					"url": url,
@@ -554,16 +554,13 @@ class AlbumScraper:
 			with open(ALBUMS_JSONL, "w", encoding="utf-8") as f:
 				for album in albums_by_id.values():
 					f.write(json.dumps(album, ensure_ascii=False) + "\n")
-			log.info(
-				f"Cache mode: saved {len(results)} releases "
-				f"({len(albums_by_id)} total)"
-			)
+			log.info(f"Cache mode: saved {len(results)} releases")
 		else:
 			with open(ALBUMS_JSONL, "w", encoding="utf-8") as f:
 				for album in results:
 					f.write(json.dumps(album, ensure_ascii=False) + "\n")
 			log.info(
-				f"Override mode: saved {len(results)} release records"
+				f"Override mode: saved {len(results)} releases"
 			)
 		with open(ALBUM_MOD_DATES_JSON, "w", encoding="utf-8") as f:
 			json.dump(self.mod_dates,f,ensure_ascii=False,indent=2)
@@ -597,10 +594,10 @@ async def main():
 	album_scraper.save_results(results)
 
 	# ---- SCRAPING ARTWORKS ----
-	log.info(f"Fetching artworks...")
-	artwork_scraper = ArtworkScraper(s, sem=150, use_cache=True)
-	artworks = await artwork_scraper.scrape_all_artworks(results)
-	artwork_scraper.save_results(artworks)
+	# log.info(f"Fetching artworks...")
+	# artwork_scraper = ArtworkScraper(s, sem=150, use_cache=True)
+	# artworks = await artwork_scraper.scrape_all_artworks(results)
+	# artwork_scraper.save_results(artworks)
 
 	log.info(f"Total time: {time.time() - start_time:.4f} seconds")
 
