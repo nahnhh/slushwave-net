@@ -22,28 +22,24 @@ However, still have to iterate through each *album* site for:
 - runtime
 
 ### Log
+#### 17/06/26: Need to fix album_scraper's cache again, it's broken lol
+
 #### 16/06/26: Take into account of singles = 1-track release
 - Get numTracks = 1 for singles: `num_tracks = schema.get('numTracks') or schema.get('inAlbum',{}).get('numTracks') or 0`
 - Working on `ArtworkScraper` now:
 	+ Parse base url with track urls -> track soup -> img -> img.content -> hash
 	+ [track_urls] perserves order of tracks -> use order as `track_num`
-	+ In `art_ids.jsonl`: *What are the unique artworks in this release?* -> `unique_track_id` will be {} if there is no other hash other than `release_art_id`
+	+ In `art_ids.jsonl`: *What are the unique artworks in this release?*
 	```json
 	{
 		"release_id": 123,
-		"release_art": {
+		"artworks": {
 			"hashA": {
-				"art_id": 111,
-				"track_num": [0]
-			},
-		}
-		"track_art": {
-			"hashA": {
-				"art_id": 111,
-				"track_num": [1,2,3]
+				"art_id": [111],
+				"track_num": [0,1,2,3] # 0 = release art
 			},
 			"hashB": {
-				"art_id": 444,
+				"art_id": [444],
 				"track_num": [4]
 			},
 		}
