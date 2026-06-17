@@ -27,29 +27,48 @@ However, still have to iterate through each *album* site for:
 - Working on `ArtworkScraper` now:
 	+ Parse base url with track urls -> track soup -> img -> img.content -> hash
 	+ [track_urls] perserves order of tracks -> use order as `track_num`
-	+ In `art_ids.jsonl`: `{alb_id, img_hash}` -> `img_hash: {hashA: [art id1, ...]}`
+	+ In `art_ids.jsonl`: *What are the unique artworks in this release?* -> `unique_track_id` will be {} if there is no other hash other than `release_art_id`
 	```json
 	{
-		"album_id": 123,
-		"img_hash": {
-			"hashA": ["111","222"],
-			"hashB": ["333"]
+		"release_id": 123,
+		"release_art": {
+			"hashA": {
+				"art_id": 111,
+				"track_num": [0]
+			},
+		}
+		"track_art": {
+			"hashA": {
+				"art_id": 111,
+				"track_num": [1,2,3]
+			},
+			"hashB": {
+				"art_id": 444,
+				"track_num": [4]
+			},
 		}
 	}
 	```
-	+ In `artworks.jsonl`: `{img_hash, albums}` -> `albums: {alb_id: [art_id1,..]}`
+	+ In `artworks.jsonl`: *Where else is this artwork used?*
 	```json
 	{
 		"img_hash": "hashA",
 		"dom_color": "...",
-		"palette": [...]
-		"albums": {
-			"123": ["111","222"],
-			"456": ["777"]
-		},
+		"palette": [...],
+		"in_release": ["release_id1","release_id2",...]
 	}
 	```
+art_ids.jsonl
+    release_id
+        ↓
+    hash -> art_id -> tracks
 
+artworks.jsonl
+    hash
+        ↓
+    palette
+    dom_color
+    in_release
 
 #### 13/06/26: New workflow for `parse_album_page` - `main()`
 1. URL Discovery: URL -> soup -> url, schema, tralbum -> pass to `extract_alt_album_urls(schema)` -> `queue.put_nowait(alt_url)` -> store to `parsed_pages[url] = {schema, album}
