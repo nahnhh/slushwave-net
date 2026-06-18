@@ -7,12 +7,10 @@ import random
 import re
 import hashlib
 import time
+from firefox_profiles import FINGERPRINTS
 from collections import defaultdict
 from tqdm import tqdm
-from typing import Any, Dict, List, Optional
-import pandas as pd
 from datetime import timedelta, datetime
-from firefox_profiles import FINGERPRINTS
 from bs4 import BeautifulSoup
 from async_tls_client import AsyncSession
 from colorthief import ColorThief
@@ -57,7 +55,7 @@ async def _test_profile(profile):
 
 	except Exception:
 		return profile, True
-	
+
 async def _get_good_profiles():
 	tasks = [_test_profile(profile) for profile in FINGERPRINTS]
 	results = await asyncio.gather(*tasks, return_exceptions=False)
@@ -154,7 +152,7 @@ class BrowserSession:
 def unique(input_list):
 	return list(set(input_list))
 
-def nozero(text: Any) -> str:
+def nozero(text) -> str:
 	if text is None:
 		return ""
 	text = str(text)
@@ -190,13 +188,14 @@ def pick_dominant_oklch(palette):
 # --- PHASE (2) BUILD ART_IDS.JSONL + (3) ARTWORKS.JSONL ---
 # --- Release results from AlbumScraper -> hash, dominant color, palette ---
 class ArtworkScraper:
-	def __init__(self, session_or_clients, sem=150, use_cache=True):
+	def __init__(self, session_or_clients, sem=300, use_cache=True):
 		if isinstance(session_or_clients, BrowserSession):
 			self.s = session_or_clients
 		else:
 			self.s = BrowserSession(session_or_clients, sem)
 		self.use_cache = use_cache
 		self.artworks = {}		# artworks metadata created
+		self._load_cache()
 
 	def _load_cache(self):
 		"""Load image hashes to dedup later."""
@@ -302,7 +301,8 @@ class ArtworkScraper:
 					"img_hash": h,
 					"dom_color": art["dom_color"],
 					"palette": art["palette"],
-					"in_release": []
+					"in_release": [],
+					"date_fetched": art["date_fetched"]
 				}
 
 		# --- Build art_ids.jsonl: Lookup all artworks in a release ---
@@ -353,12 +353,12 @@ class ArtworkScraper:
 		return results
 
 	def save_results(self, results):
+		art_ids_content = "\n".join(json.dumps(r, ensure_ascii=False) for r in results) + "\n"
+		artworks_content = "\n".join(json.dumps(r, ensure_ascii=False) for r in self.artworks.values()) + "\n"
 		with open(ART_IDS_JSONL, "w", encoding="utf-8") as f:
-			for record in results:
-				f.write(json.dumps(record, ensure_ascii=False) + "\n")
+			f.write(art_ids_content)
 		with open(ARTWORKS_JSONL, "w", encoding="utf-8") as f:
-			for artwork in self.artworks.values():
-				f.write(json.dumps(artwork, ensure_ascii=False) + "\n")
+			f.write(artworks_content)
 		log.info(
 			f"Saved {len(results)} art_id records "
 			f"and {len(self.artworks)} artwork records"
@@ -374,14 +374,24 @@ class AlbumScraper:
 			self.s = BrowserSession(session_or_clients, sem)
 		self.mod_dates = {}
 		self.album_urls = set()
+		self.albums = {}
 		self.use_cache = use_cache
+		self._load_cache()
 
 	def _load_cache(self):
-		"""Load {url: mod_date} to check for stale albums later."""
-		if not self.use_cache or not ALBUM_MOD_DATES_JSON.exists():
+		if not self.use_cache:
 			return
-		with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
-			self.mod_dates = json.load(f)
+		if ALBUM_MOD_DATES_JSON.exists():
+			with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
+				self.mod_dates = json.load(f)
+		if ALBUMS_JSONL.exists():
+			with open(ALBUMS_JSONL, "r", encoding="utf-8") as f:
+				for line in f:
+					try:
+						album = json.loads(line)
+						self.albums[album["album_id"]] = album
+					except Exception:
+						continue
 
 	# --- 0. Read from artist list -> music page soup -> album urls ---
 	async def _fetch_albums_from_artist(self, artist_url) -> set[str]:
@@ -537,33 +547,15 @@ class AlbumScraper:
 	
 	def save_results(self, results):
 		if self.use_cache:
-			# Load existing albums
-			albums_by_id = {}
-			if ALBUMS_JSONL.exists():
-				with open(ALBUMS_JSONL, "r", encoding="utf-8") as f:
-					for line in f:
-						try:
-							album = json.loads(line)
-							albums_by_id[album["album_id"]] = album
-						except Exception:
-							continue
-			# Apply updates
 			for album in results:
-				albums_by_id[album["album_id"]] = album
-			# Rewrite file
-			with open(ALBUMS_JSONL, "w", encoding="utf-8") as f:
-				for album in albums_by_id.values():
-					f.write(json.dumps(album, ensure_ascii=False) + "\n")
-			log.info(f"Cache mode: saved {len(results)} releases")
+				self.albums[album["album_id"]] = album
 		else:
-			with open(ALBUMS_JSONL, "w", encoding="utf-8") as f:
-				for album in results:
-					f.write(json.dumps(album, ensure_ascii=False) + "\n")
-			log.info(
-				f"Override mode: saved {len(results)} releases"
-			)
+			self.albums = {album["album_id"]: album for album in results}
+		with open(ALBUMS_JSONL, "w", encoding="utf-8") as f:
+			for album in self.albums.values():
+				f.write(json.dumps(album, ensure_ascii=False) + "\n")
 		with open(ALBUM_MOD_DATES_JSON, "w", encoding="utf-8") as f:
-			json.dump(self.mod_dates,f,ensure_ascii=False,indent=2)
+			json.dump(self.mod_dates, f, ensure_ascii=False, indent=2)
 
 # ====================================
 # OKAY!!! LET'S GET THIS THING RUNNING
@@ -576,16 +568,12 @@ async def main():
 	s = BrowserSession(ok_clients=ok_clients)
 
 	# ---- SCRAPING ALBUMS ----
-	album_scraper = AlbumScraper(s, sem=150, use_cache=True)
+	album_scraper = AlbumScraper(s, sem=50, use_cache=False)
 	log.info(f"Fetching album urls...")
-	urls = [
-		'https://itachitsukiyomi.bandcamp.com/album/-',
-		'https://geometriclullaby.bandcamp.com/album/geo-c07',
-		'https://818181.bandcamp.com/album/life-after',
-		'https://18days.bandcamp.com/album/infinite-color',
-		'https://18days.bandcamp.com/album/all-night-long-2'
-	]
-	# urls = 'seed_urls.txt'
+	# urls = [
+	# 	'https://giftsfromhome.bandcamp.com/album/-',
+	# ]
+	urls = 'slushwave-bandcamp-links.txt'
 	await album_scraper.get_all_album_urls(urls)  # type: ignore
 	results = await album_scraper.scrape_all_albums()
 	if not results:
@@ -595,11 +583,11 @@ async def main():
 
 	# ---- SCRAPING ARTWORKS ----
 	# log.info(f"Fetching artworks...")
-	# artwork_scraper = ArtworkScraper(s, sem=150, use_cache=True)
+	# artwork_scraper = ArtworkScraper(s, sem=50, use_cache=True)
 	# artworks = await artwork_scraper.scrape_all_artworks(results)
 	# artwork_scraper.save_results(artworks)
 
-	log.info(f"Total time: {time.time() - start_time:.4f} seconds")
+	# log.info(f"Total time: {time.time() - start_time:.4f} seconds")
 
 if __name__ == "__main__":
 	asyncio.run(main())

@@ -1,15 +1,15 @@
 ### Things to do
 [x] Create a Python script to scrape source data from the list: artist, album, year, image -> albums.json
 [x] Use `color-thief-py` to get dominant color of album -> artworks.json
-[ ] Add other album urls in description/credits to URL scraping queue
-[ ] Change `artworks.jsonl` to `{img_hash, art_id {album1:[art_id], album2:[.]}, ...}`
+[x] Add other album urls in description/credits to URL scraping queue
+[x] Rework `artworks.jsonl` to be intuitive
 [ ] Assign color to node, display all nodes around a color wheel (OKLCH)
 [ ] Add other album urls in description/credits to URL scraping queue
-[ ] Change `artworks.jsonl` to `{img_hash, art_id {album1:[art_id], album2:[.]}, ...}`
 [ ] Assign color to node, display all nodes around a color wheel (OKLCH)
 [ ] HTML & CSS to create the site (neocities)
 
 ### Info to scrape from artist list --> Compile `source.json` file
+Note: `good_profiles.json` is derived from `firefox_profiles.py`. It's a cache file of all the profiles that has been tested fit for scraping without returning 404's.
 From the bandcamp artist's *Music* site, the scraper can find info for:
 - artist(s)
 - alias
@@ -23,6 +23,12 @@ However, still have to iterate through each *album* site for:
 
 ### Log
 #### 17/06/26: Need to fix album_scraper's cache again, it's broken lol
+- Okay fixed, need to add date_fetched back to `artworks.jsonl`
+- Todos:
+	+ 3 Question-Answer functions
+	1. In `artworks.jsonl`: *Where else is this artwork used?*
+	2. In `albums.jsonl`: *If I click on a release, what metadata should it show?*
+	3. In `art_ids.jsonl`: *What are the unique artworks in this release?*
 
 #### 16/06/26: Take into account of singles = 1-track release
 - Get numTracks = 1 for singles: `num_tracks = schema.get('numTracks') or schema.get('inAlbum',{}).get('numTracks') or 0`
@@ -51,7 +57,8 @@ However, still have to iterate through each *album* site for:
 		"img_hash": "hashA",
 		"dom_color": "...",
 		"palette": [...],
-		"in_release": ["release_id1","release_id2",...]
+		"in_release": ["release_id1","release_id2",...],
+		"date_fetched": "11 Jun 2026 12:22:14 VNT"
 	}
 	```
 art_ids.jsonl
@@ -65,6 +72,7 @@ artworks.jsonl
     palette
     dom_color
     in_release
+	date_fetched
 
 #### 13/06/26: New workflow for `parse_album_page` - `main()`
 1. URL Discovery: URL -> soup -> url, schema, tralbum -> pass to `extract_alt_album_urls(schema)` -> `queue.put_nowait(alt_url)` -> store to `parsed_pages[url] = {schema, album}
