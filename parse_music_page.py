@@ -670,7 +670,7 @@ class AlbumScraper:
 			log.exception(f"Failed to parse {url}")
 			return {}
 	
-	async def scrape_all_albums(self, seed_urls=None, ) -> list:
+	async def scrape_all_albums(self, seed_urls=None) -> list:
 		"""Scrape albums & discover more albums on the run."""
 		start_time = time.time()
 		if seed_urls:
