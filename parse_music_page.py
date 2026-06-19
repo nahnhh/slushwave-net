@@ -87,15 +87,8 @@ class IsntHere(Exception):
 	pass
 class ClientChallenge(Exception):
 	pass
-class TooManyRequests(Exception):
-	pass
-class IsntHere(Exception):
-	pass
-class ClientChallenge(Exception):
-	pass
 
 class BrowserSession:
-	def __init__(self, ok_clients: list, sem=50, requests_per_sec=2):
 	def __init__(self, ok_clients: list, sem=50, requests_per_sec=2):
 		self.ok_clients = ok_clients
 		self.requests_made = 0
@@ -128,14 +121,6 @@ class BrowserSession:
 			"Referer": "https://bandcamp.com/",
 			"Accept-Language": "en-US,en;q=0.9",
 		})
-
-	async def _wait_for_rate_limit(self):
-		async with self.rate_lock:
-			now = time.monotonic()
-			wait = self.min_interval - (now - self.last_request)
-			if wait > 0:
-				await asyncio.sleep(wait)
-			self.last_request = time.monotonic()
 
 	async def _wait_for_rate_limit(self):
 		async with self.rate_lock:
@@ -214,8 +199,6 @@ class BrowserSession:
 			return None
 		except TooManyRequests:
 			log.warning(f"Too many requests after retries: {url}")
-		except TooManyRequests:
-			log.warning(f"Too many requests after retries: {url}")
 			return None
 		except Exception:
 			log.exception(f"Failed: {url}")
@@ -223,9 +206,6 @@ class BrowserSession:
 
 
 # --- FUNCTIONS TO USE ---
-def split_to_batches(items, batch_size=8):
-	for i in range(0, len(items), batch_size):
-		yield items[i:i + batch_size]
 def split_to_batches(items, batch_size=8):
 	for i in range(0, len(items), batch_size):
 		yield items[i:i + batch_size]
@@ -440,7 +420,6 @@ class ArtworkScraper:
 			artworks[h]["art_id"].append(art_id)
 			artworks[h]["track_num"].extend(track_nums)
 		record = {
-		record = {
 			"release_id": release["album_id"],
 			"artworks": artworks,
 		}
@@ -572,7 +551,6 @@ class AlbumScraper:
 			+) Album page url -> keep directly
 		"""
 		if isinstance(file_or_list, (list, set, tuple)):
-		if isinstance(file_or_list, (list, set, tuple)):
 			urls = set(file_or_list)
 		else:
 			with open(Path(file_or_list), "r", encoding="utf-8") as f:
@@ -588,7 +566,6 @@ class AlbumScraper:
 		artist_urls = urls - album_urls
 		url_lists = await asyncio.gather(
 			*(self._fetch_albums_from_artist(url) for url in artist_urls),
-			return_exceptions=True
 			return_exceptions=True
 		)
 		for result in url_lists:
@@ -694,7 +671,6 @@ class AlbumScraper:
 			return {}
 	
 	async def scrape_all_albums(self, seed_urls=None, ) -> list:
-	async def scrape_all_albums(self, seed_urls=None, ) -> list:
 		"""Scrape albums & discover more albums on the run."""
 		start_time = time.time()
 		if seed_urls:
@@ -706,14 +682,8 @@ class AlbumScraper:
 			while True:
 				urls_to_process = list(self.album_urls - processed_urls)
 				if not urls_to_process:
-				urls_to_process = list(self.album_urls - processed_urls)
-				if not urls_to_process:
 					break
 				fetched = await asyncio.gather(
-					*(self._scrape_album_page(url) for url in urls_to_process)
-				)
-				processed_urls.update(urls_to_process)
-				results.extend(item for item in fetched if item)
 					*(self._scrape_album_page(url) for url in urls_to_process)
 				)
 				processed_urls.update(urls_to_process)
