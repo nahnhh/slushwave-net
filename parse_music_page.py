@@ -29,8 +29,8 @@ logging.basicConfig(
 log = logging.getLogger('rich')
 
 GOOD_PROFILES = Path("good_profiles.json")
-LINKS_FILE = "slushwave-bandcamp-links.txt"
-ARTISTS_SLUSHWAVE_JSONL = Path("artist_slushwave.jsonl")
+LINKS_FILE_COPY = Path("slushwave-bandcamp-links copy.txt")
+ARTISTS_SLUSHWAVE_JSONL = Path("all_slushwave_artists.jsonl")
 ALBUM_MOD_DATES_JSON = Path("album_mod_dates.json")
 ALBUMS_JSONL = Path("albums.jsonl")
 ART_IDS_JSONL = Path("art_release_ids.jsonl")
@@ -97,9 +97,6 @@ class BrowserSession:
 		self.rate_lock = asyncio.Lock()
 		self.last_request = 0.0
 		self.min_interval = 1 / requests_per_sec
-		self.rate_lock = asyncio.Lock()
-		self.last_request = 0.0
-		self.min_interval = 1 / requests_per_sec
 
 	def rotate_client(self):
 		self.client_identifier = random.choice(self.ok_clients)
@@ -138,31 +135,8 @@ class BrowserSession:
 					r = await self.session.get(url, **kwargs)
 				if r.status_code == 429:
 					backoff = random.uniform(
-						5 * (attempt + 1),
-						10 * (attempt + 1)
-					)
-					log.warning(
-						f"429 ({attempt+1}/3), sleeping {backoff:.1f} seconds"
-					)
-					await asyncio.sleep(backoff)
-					continue
-				return r
-			except Exception:
-				if attempt < 2:
-					await asyncio.sleep(2 * (attempt + 1))
-					continue
-				raise
-
-		raise TooManyRequests
-		for attempt in range(3):
-			try:
-				async with self.sem:
-					await self._wait_for_rate_limit()
-					r = await self.session.get(url, **kwargs)
-				if r.status_code == 429:
-					backoff = random.uniform(
-						5 * (attempt + 1),
-						10 * (attempt + 1)
+						7 * (attempt + 1),
+						14 * (attempt + 1)
 					)
 					log.warning(
 						f"429 ({attempt+1}/3), sleeping {backoff:.1f} seconds"
@@ -178,23 +152,31 @@ class BrowserSession:
 
 		raise TooManyRequests
 	
+	async def _check_response(self, url):
+		"""Checks response for 404 or Client Challenge"""
+		r = await self.get(url)
+		if r.status_code == 404:
+			log.info(f"SKIP: Page isn't here {url}")
+			return None
+		soup = BeautifulSoup(r.text or "", "lxml")
+		title = soup.title.get_text(strip=True) if soup.title else ""
+		if title == "Client Challenge":
+			raise ClientChallenge
+		return soup	
+
 	async def fetch(self, url):
 		"""Fetch soup from URL."""
-		"""Fetch soup from URL."""
 		try:
-			r = await self.get(url)
-			if r.status_code == 404:
-				log.info(f"SKIP: Page isn't here {url}")
-				return None
-				log.info(f"SKIP: Page isn't here {url}")
-				return None
-			soup = BeautifulSoup(r.text or "", "lxml")
-			title = soup.title.get_text(strip=True) if soup.title else ""
-			if title == "Client Challenge":
-				raise ClientChallenge
-			return soup
+			soup = await self._check_response(url)
+			if soup:
+				a = soup.select_one("body a[href]")
+				if (a and soup.body and 
+					soup.body.get_text().startswith("You are being redirected")):
+					redirect_url = a["href"]
+					log.info(f"Redirect {url} -> {redirect_url}")
+					soup = await self._check_response(redirect_url)
+				return soup
 		except ClientChallenge:
-			log.warning(f"Client Challenge: {url}")
 			log.warning(f"Client Challenge: {url}")
 			return None
 		except TooManyRequests:
@@ -477,17 +459,17 @@ class ArtworkScraper:
 # --- PHASE (0) URL DISCOVERY + (1) PARSE ALBUM DATA ---
 # --- Artist urls (Music pages) list -> Music page soup -> Album urls -> Album soup -> schema, tralbum -> Album data + Track urls ---
 class AlbumScraper:
-	def __init__(self, session_or_clients, sem=150, use_cache=True, skip_mode="historical"): # or "stale"
+	def __init__(self, session_or_clients, sem=150, use_cache=True, skip_mode="historical"): # "historical" | "stale" 
 		if isinstance(session_or_clients, BrowserSession):
 			self.s = session_or_clients
 		else:
 			self.s = BrowserSession(session_or_clients, sem)
+		self.use_cache = use_cache
+		self.skip_mode = skip_mode
 		self.mod_dates = {}
 		self.artists_slushwave = {}
 		self.albums = {}
 		self.album_urls = set()
-		self.use_cache = use_cache
-		self.skip_mode = skip_mode
 		self._load_cache()
 
 	def _load_cache(self):
@@ -498,7 +480,14 @@ class AlbumScraper:
 				for line in f:
 					try:
 						record = json.loads(line)
-						self.artists_slushwave[record["artist_url"]] = record
+						artist_url = record["artist_url"].rstrip("/")
+						slushwave = record.get("slushwave", [])
+						not_slushwave = record.get("not_slushwave", [])
+						self.artists_slushwave[artist_url] = {
+							"artist_url": artist_url,
+							"slushwave": slushwave,
+							"not_slushwave": not_slushwave,
+						}
 					except Exception:
 						continue
 		if ALBUMS_JSONL.exists():
@@ -513,53 +502,43 @@ class AlbumScraper:
 			with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
 				self.mod_dates = json.load(f)
 
-	def get_skip_urls(self):
-		urls_to_skip = set()
-		for artist_url, data in self.artists_slushwave.items():
-			if self.skip_mode == "historical":
-				rel_urls = (data.get("slushwave", []) + data.get("not_slushwave", []))
-			elif self.skip_mode == "stale":
-				rel_urls = data.get("not_slushwave", [])
-			else:
-				rel_urls = []
-			urls_to_skip.update(
-				rel if rel.startswith("http") 
-				else artist_url.rstrip("/") + rel
-				for rel in rel_urls
-			)
-		return urls_to_skip
-	
-	def remove_skipped_urls(self, urls):
-		skip_urls = self.get_skip_urls()
-		filtered = [
-			u for u in urls
-			if u not in skip_urls
-		]
-		log.info(
-			f"Skipping {len(urls) - len(filtered)} URLs "
-			f"using mode='{self.skip_mode}'"
-		)
-		return filtered
-
 	# --- 0. Read from artist list -> music page soup -> album urls ---
+	def _should_skip_release(self, artist_url: str, rel_url: str) -> bool:
+		cached = self.artists_slushwave.get(artist_url, {})
+		if self.skip_mode == "historical":
+			return (
+				rel_url in cached.get("slushwave", [])
+				or rel_url in cached.get("not_slushwave", [])
+			)
+		if self.skip_mode == "stale":
+			return rel_url in cached.get("not_slushwave", [])
+		return False
+
 	async def _fetch_releases_from_artist(self, artist_url) -> set[str]:
 		"""Get response & soup from Music page -> extract album urls"""
-		artist_url = artist_url.rstrip("/")
+		artist_root = artist_url.removesuffix("/music")
+		await asyncio.sleep(random.uniform(0.5,1))
 		soup = await self.s.fetch(artist_url)
-		if soup is None:
+		if not soup:
 			return set()
 		links = (
 			soup.select("li.music-grid-item a[href]")
 			or soup.select("div.ipCellImage a[href]")
 		)
-		album_urls = {
-			href if href.startswith("http") # type: ignore
-			else artist_url + href
-			for href in (a["href"] for a in links)
+		release_urls = {
+			a["href"] for a in links
+			if not self._should_skip_release(artist_root, a["href"])
 		}
-		return album_urls # type: ignore
+		if not release_urls:
+			log.info(f"SKIP: No new releases by {artist_root}")
+			return set()
 
-	async def get_all_release_urls(self, file_or_list=LINKS_FILE):
+		album_urls = {rel if rel.startswith("http") 
+					else artist_root + rel 
+					for rel in release_urls}
+		return album_urls
+
+	async def get_all_release_urls(self, file_or_list):
 		"""
 		Get all album urls from a .txt file with all links listed.
 			+) Music (artist) page url -> music soup -> extract album urls
@@ -578,7 +557,7 @@ class AlbumScraper:
 		}
 		artist_urls = urls - album_urls
 		url_lists = await asyncio.gather(
-			*(self._fetch_releases_from_artist(url) for url in artist_urls),
+			*(self._fetch_releases_from_artist(url.rstrip("/") + "/music") for url in artist_urls),
 			return_exceptions=True
 		)
 		for result in url_lists:
@@ -587,15 +566,8 @@ class AlbumScraper:
 					f"Artist page fetch failed for {result}",
 					exc_info=result
 				)
-			else:
-				album_urls.update(result) # type: ignore
-		for result in url_lists:
-			if isinstance(result, Exception):
-				log.exception(
-					f"Artist page fetch failed for {result}",
-					exc_info=result
-				)
-			else:
+				continue
+			if result:
 				album_urls.update(result) # type: ignore
 		self.album_urls.update(album_urls)
 
@@ -613,7 +585,7 @@ class AlbumScraper:
 			log.info(f"{len(alt_urls)} other album url found in {url}")
 		self.album_urls.update(alt_urls)
 
-	def _is_genre(self, keywords, genres=("slush","nature","signal","transmission","mallsoft")):
+	def _is_genre(self, keywords, genres=("slush","nature","ambient","dreamtone","signal","transmission","mallsoft")):
 		kw = {k.lower() for k in (keywords or [])}
 		for keyword in kw:
 			if any(genre in keyword for genre in genres):
@@ -661,7 +633,7 @@ class AlbumScraper:
 			self._record_release(artist_url, url, is_genre)
 
 			if not is_genre:
-				log.info(f"SKIP: Not slush/nature/signalwave/mallsoft {url}")
+				log.info(f"SKIP: Not target genre {url}")
 				return {}
 
 			self._get_alt_album_urls(schema, url)
@@ -701,7 +673,6 @@ class AlbumScraper:
 	
 	async def scrape_all_albums(self, seed_urls=None) -> list:
 		"""Scrape albums & discover more albums on the run."""
-		start_time = time.time()
 		if seed_urls:
 			self.album_urls.update(seed_urls)
 		pbar = tqdm(total=len(self.album_urls), desc="Albums", unit="album")
@@ -732,7 +703,7 @@ class AlbumScraper:
 			if not results:
 				log.info("No new or updated albums found.")
 			log.info(
-				f"Finished fetching urls in {time.time() - start_time:.4f} seconds: "
+				f"Finished fetching urls: "
 				f"{len(processed_urls)} URLs -> {len(results)} albums"
 			)
 		return results
@@ -764,16 +735,15 @@ async def main():
 
 	# # ---- SCRAPING ALBUMS ----
 	log.info(f"Fetching album urls...")
-	with open("slushwave-bandcamp-links.txt", "r", encoding="utf-8") as f:
+	with open("slushwave-bandcamp-links copy.txt", "r", encoding="utf-8") as f:
 		urls = [line.strip() for line in f if line.strip()]
-	# also accepts urls = [
+	# urls = [
 	# 	'https://giftsfromhome.bandcamp.com/album/-',
 	# ]
 	album_scraper = AlbumScraper(s, sem=8, use_cache=True, skip_mode="historical")
-	urls = album_scraper.remove_skipped_urls(urls)
-	log.info(f"{album_scraper.skip_mode.upper()} mode: {len(urls)} urls remaining")
 
 	for batch_num, batch_urls in enumerate(split_to_batches(urls, 8), start=1):
+		start_time_batch = time.time()
 		log.info(f"Processing batch {batch_num} ({len(batch_urls)} urls)")
 		# Clear discovered URLs from previous batch
 		album_scraper.album_urls.clear()
@@ -782,9 +752,10 @@ async def main():
 		results = await album_scraper.scrape_all_albums()
 		if results:	
 			album_scraper.save_results(results)
-			log.info(f"Batch {batch_num}: saved {len(results)} albums")
+			log.info(f"Batch {batch_num}: saved {len(results)} albums in {time.time() - start_time_batch:.2f} seconds")
 		else:
 			log.info("No new or updated albums found.")
+		await asyncio.sleep(2)
 
 	# ---- SCRAPING ARTWORKS ----
 	# log.info(f"Fetching artworks...")

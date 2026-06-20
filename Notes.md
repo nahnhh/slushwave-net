@@ -22,6 +22,8 @@ However, still have to iterate through each *album* site for:
 - runtime
 
 ### Log
+#### 20/06/25: Added checks for "You are being directed"
+
 #### 17/06/26: Need to fix album_scraper's cache again, it's broken lol
 - Okay fixed, need to add date_fetched back to `artworks.jsonl`
 - Todos:
