@@ -30,7 +30,7 @@ log = logging.getLogger('rich')
 
 GOOD_PROFILES = Path("good_profiles.json")
 LINKS_FILE = "slushwave-bandcamp-links.txt"
-ARTIST_SLUSHWAVE_JSONL = Path("artist_slushwave.jsonl")
+ARTISTS_SLUSHWAVE_JSONL = Path("artist_slushwave.jsonl")
 ALBUM_MOD_DATES_JSON = Path("album_mod_dates.json")
 ALBUMS_JSONL = Path("albums.jsonl")
 ART_IDS_JSONL = Path("art_release_ids.jsonl")
@@ -496,7 +496,7 @@ class ArtworkScraper:
 # --- PHASE (0) URL DISCOVERY + (1) PARSE ALBUM DATA ---
 # --- Artist urls (Music pages) list -> Music page soup -> Album urls -> Album soup -> schema, tralbum -> Album data + Track urls ---
 class AlbumScraper:
-	def __init__(self, session_or_clients, sem=150, use_cache=True, skip_mode="stale"): # or "historical"
+	def __init__(self, session_or_clients, sem=150, use_cache=True, skip_mode="historical"): # or "stale"
 		if isinstance(session_or_clients, BrowserSession):
 			self.s = session_or_clients
 		else:
@@ -512,6 +512,14 @@ class AlbumScraper:
 	def _load_cache(self):
 		if not self.use_cache:
 			return
+		if ARTISTS_SLUSHWAVE_JSONL.exists():
+			with open(ARTISTS_SLUSHWAVE_JSONL, "r", encoding="utf-8") as f:
+				for line in f:
+					try:
+						record = json.loads(line)
+						self.artists_slushwave[record["artist_url"]] = record
+					except Exception:
+						continue
 		if ALBUM_MOD_DATES_JSON.exists():
 			with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
 				self.mod_dates = json.load(f)
@@ -524,8 +532,36 @@ class AlbumScraper:
 					except Exception:
 						continue
 
+	def get_skip_urls(self):
+		urls_to_skip = set()
+		for artist_url, data in self.artists_slushwave.items():
+			if self.skip_mode == "historical":
+				rel_urls = (data.get("slushwave", []) + data.get("not_slushwave", []))
+			elif self.skip_mode == "stale":
+				rel_urls = data.get("not_slushwave", [])
+			else:
+				rel_urls = []
+			urls_to_skip.update(
+				rel if rel.startswith("http") 
+				else artist_url.rstrip("/") + rel
+				for rel in rel_urls
+			)
+		return urls_to_skip
+	
+	def remove_skipped_urls(self, urls):
+		skip_urls = self.get_skip_urls()
+		filtered = [
+			u for u in urls
+			if u not in skip_urls
+		]
+		log.info(
+			f"Skipping {len(urls) - len(filtered)} URLs "
+			f"using mode='{self.skip_mode}'"
+		)
+		return filtered
+
 	# --- 0. Read from artist list -> music page soup -> album urls ---
-	async def _fetch_albums_from_artist(self, artist_url) -> set[str]:
+	async def _fetch_releases_from_artist(self, artist_url) -> set[str]:
 		"""Get response & soup from Music page -> extract album urls"""
 		artist_url = artist_url.rstrip("/")
 		soup = await self.s.fetch(artist_url)
@@ -542,7 +578,7 @@ class AlbumScraper:
 		}
 		return album_urls # type: ignore
 
-	async def get_all_album_urls(self, file_or_list=LINKS_FILE):
+	async def get_all_release_urls(self, file_or_list=LINKS_FILE):
 		"""
 		Get all album urls from a .txt file with all links listed.
 			+) Music (artist) page url -> music soup -> extract album urls
@@ -559,13 +595,9 @@ class AlbumScraper:
 			url for url in urls
 			if ALBUM_URL.match(url) or SINGLE_URL.match(url)
 		}
-		album_urls = {
-			url for url in urls
-			if ALBUM_URL.match(url) or SINGLE_URL.match(url)
-		}
 		artist_urls = urls - album_urls
 		url_lists = await asyncio.gather(
-			*(self._fetch_albums_from_artist(url) for url in artist_urls),
+			*(self._fetch_releases_from_artist(url) for url in artist_urls),
 			return_exceptions=True
 		)
 		for result in url_lists:
@@ -585,7 +617,7 @@ class AlbumScraper:
 			else:
 				album_urls.update(result) # type: ignore
 		self.album_urls.update(album_urls)
-	
+
 	# --- Read album urls -> album page soup -> alt album urls + album data + track urls ---
 	def _get_alt_album_urls(self, album_schema, url=None):
 		"""Get other album urls in description/credits -> Update to {album_urls}"""
@@ -599,6 +631,27 @@ class AlbumScraper:
 		if alt_urls:
 			log.info(f"{len(alt_urls)} other album url found in {url}")
 		self.album_urls.update(alt_urls)
+
+	def _is_genre(self, keywords, genres=("slush","nature","signal","broken","mallsoft")):
+		kw = {k.lower() for k in (keywords or [])}
+		for keyword in kw:
+			if any(genre in keyword for genre in genres):
+				return True
+		return False
+
+	def _record_release(self, artist_url, url, is_target):
+		rel = url[len(artist_url):] if url.startswith(artist_url) else url
+		record = self.artists_slushwave.setdefault(
+			artist_url,
+			{
+				"artist_url": artist_url,
+				"slushwave": [],
+				"not_slushwave": []
+			}
+		)
+		key = "slushwave" if is_target else "not_slushwave"
+		if rel not in record[key]:
+			record[key].append(rel)
 
 	async def _scrape_album_page(self, url) -> dict:
 		"""
@@ -631,8 +684,12 @@ class AlbumScraper:
 
 			# Skip non slushwave releases
 			keywords = schema.get('keywords',[])
-			if not {k.lower() for k in keywords} & {"slushwave"}:
-				log.info(f"SKIP: Not slushwave {url}")
+			artist_url = (url.split("/album/")[0] if "/album/" in url else url.split("/track/")[0])
+			is_genre = self._is_genre(keywords)
+			self._record_release(artist_url, url, is_genre)
+
+			if not is_genre:
+				log.info(f"SKIP: Not slush/nature/signalwave/mallsoft {url}")
 				return {}
 
 			self._get_alt_album_urls(schema, url)
@@ -719,6 +776,9 @@ class AlbumScraper:
 		with open(ALBUMS_JSONL, "w", encoding="utf-8") as f:
 			for album in self.albums.values():
 				f.write(json.dumps(album, ensure_ascii=False) + "\n")
+		with open(ARTISTS_SLUSHWAVE_JSONL, "w", encoding="utf-8") as f:
+			for record in self.artists_slushwave.values():
+				f.write(json.dumps(record, ensure_ascii=False) + "\n")
 		with open(ALBUM_MOD_DATES_JSON, "w", encoding="utf-8") as f:
 			json.dump(self.mod_dates, f, ensure_ascii=False, indent=2)
 
@@ -733,37 +793,21 @@ async def main():
 	s = BrowserSession(ok_clients=ok_clients)
 
 	# # ---- SCRAPING ALBUMS ----
-	album_scraper = AlbumScraper(s, sem=8, use_cache=True, skip_mode="historical")
 	log.info(f"Fetching album urls...")
-	# also accepts urls = [
+	with open("slushwave-bandcamp-links.txt", "r", encoding="utf-8") as f:
+		urls = [line.strip() for line in f if line.strip()]
 	# also accepts urls = [
 	# 	'https://giftsfromhome.bandcamp.com/album/-',
 	# ]
-
-	with open("slushwave-bandcamp-links.txt", "r", encoding="utf-8") as f:
-		urls = [line.strip() for line in f if line.strip()]
-
-	for batch_num, batch_urls in enumerate(split_to_batches(urls, 8), start=1):
-		log.info(f"Processing batch {batch_num} ({len(batch_urls)} urls)")
-		# Clear discovered URLs from previous batch
-		album_scraper.album_urls.clear()
-		await album_scraper.get_all_album_urls(batch_urls) # type: ignore
-		album_scraper.album_urls.difference_update(album_scraper.mod_dates.keys())
-		results = await album_scraper.scrape_all_albums()
-		if results:	
-			album_scraper.save_results(results)
-			log.info(f"Batch {batch_num}: saved {len(results)} albums")
-		else:
-			log.info("No new or updated albums found.")
-
-	with open("slushwave-bandcamp-links.txt", "r", encoding="utf-8") as f:
-		urls = [line.strip() for line in f if line.strip()]
+	album_scraper = AlbumScraper(s, sem=8, use_cache=True, skip_mode="historical")
+	urls = album_scraper.remove_skipped_urls(urls)
+	log.info(f"{album_scraper.skip_mode.upper()} mode: {len(urls)} urls remaining")
 
 	for batch_num, batch_urls in enumerate(split_to_batches(urls, 8), start=1):
 		log.info(f"Processing batch {batch_num} ({len(batch_urls)} urls)")
 		# Clear discovered URLs from previous batch
 		album_scraper.album_urls.clear()
-		await album_scraper.get_all_album_urls(batch_urls) # type: ignore
+		await album_scraper.get_all_release_urls(batch_urls) # type: ignore
 		album_scraper.album_urls.difference_update(album_scraper.mod_dates.keys())
 		results = await album_scraper.scrape_all_albums()
 		if results:	
@@ -778,9 +822,7 @@ async def main():
 	# 	releases = [json.loads(line) for line in f if line.strip()]
 	# artwork_scraper = ArtworkScraper(s, sem=8, use_cache=True)
 	# processed_ids = set(artwork_scraper.release_ids.keys())
-	# releases = [
-	# 	release
-	# 	for release in releases
+	# releases = [release for release in releases
 	# 	if release["album_id"] not in processed_ids
 	# ]
 	# log.info(f"Skipping {len(processed_ids)} already processed releases, "
