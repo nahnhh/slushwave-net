@@ -816,7 +816,6 @@ async def main():
 	# 	artwork_scraper.save_results(results)
 
 	log.info(f"Total time: {time.time() - start_time:.4f} seconds")
-	log.info(f"Total time: {time.time() - start_time:.4f} seconds")
 
 if __name__ == "__main__":
 	asyncio.run(main())
