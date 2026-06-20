@@ -396,8 +396,6 @@ class ArtworkScraper:
 		release_id = release["album_id"]
 		if self.use_cache and release_id in self.release_ids:
 			return self.release_ids[release_id]
-		if self.use_cache and release_id in self.release_ids:
-			return self.release_ids[release_id]
 		for h in set(art_id_to_hash.values()):
 			if release_id not in self.artworks[h]["in_release"]:
 				self.artworks[h]["in_release"].append(release_id)
@@ -423,8 +421,6 @@ class ArtworkScraper:
 			"release_id": release["album_id"],
 			"artworks": artworks,
 		}
-		self.release_ids[release_id] = record
-		return record
 		self.release_ids[release_id] = record
 		return record
 	
@@ -458,10 +454,6 @@ class ArtworkScraper:
 					processed=len(results),
 					artworks=len(self.artworks),
 				)
-				pbar.set_postfix(
-					processed=len(results),
-					artworks=len(self.artworks),
-				)
 
 		return results
 
@@ -470,25 +462,14 @@ class ArtworkScraper:
 		for record in results:
 			self.release_ids[record["release_id"]] = record
 		# write release cache
-		# update release cache
-		for record in results:
-			self.release_ids[record["release_id"]] = record
-		# write release cache
 		with open(ART_IDS_JSONL, "w", encoding="utf-8") as f:
-			for record in self.release_ids.values():
-				f.write(json.dumps(record, ensure_ascii=False) + "\n")
-		# write artwork cache
 			for record in self.release_ids.values():
 				f.write(json.dumps(record, ensure_ascii=False) + "\n")
 		# write artwork cache
 		with open(ARTWORKS_JSONL, "w", encoding="utf-8") as f:
 			for record in self.artworks.values():
 				f.write(json.dumps(record, ensure_ascii=False) + "\n")
-			for record in self.artworks.values():
-				f.write(json.dumps(record, ensure_ascii=False) + "\n")
 		log.info(
-			f"Added {len(results)} release_id records "
-			f"and saved {len(self.artworks)} artwork records"
 			f"Added {len(results)} release_id records "
 			f"and saved {len(self.artworks)} artwork records"
 		)
@@ -520,9 +501,6 @@ class AlbumScraper:
 						self.artists_slushwave[record["artist_url"]] = record
 					except Exception:
 						continue
-		if ALBUM_MOD_DATES_JSON.exists():
-			with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
-				self.mod_dates = json.load(f)
 		if ALBUMS_JSONL.exists():
 			with open(ALBUMS_JSONL, "r", encoding="utf-8") as f:
 				for line in f:
@@ -531,6 +509,9 @@ class AlbumScraper:
 						self.albums[album["album_id"]] = album
 					except Exception:
 						continue
+		if ALBUM_MOD_DATES_JSON.exists():
+			with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
+				self.mod_dates = json.load(f)
 
 	def get_skip_urls(self):
 		urls_to_skip = set()
@@ -632,7 +613,7 @@ class AlbumScraper:
 			log.info(f"{len(alt_urls)} other album url found in {url}")
 		self.album_urls.update(alt_urls)
 
-	def _is_genre(self, keywords, genres=("slush","nature","signal","broken","mallsoft")):
+	def _is_genre(self, keywords, genres=("slush","nature","signal","transmission","mallsoft")):
 		kw = {k.lower() for k in (keywords or [])}
 		for keyword in kw:
 			if any(genre in keyword for genre in genres):
@@ -662,15 +643,6 @@ class AlbumScraper:
 			soup = await self.s.fetch(url)
 			if not soup:
 				return {}
-			tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum","{}")) # type: ignore
-			current = tralbum.get('current')
-
-			# Skip stale albums with no updates
-			mod_date = current.get("mod_date") or ""
-			if mod_date == self.mod_dates.get(url):
-				log.info(f"SKIP: No updates for {url}")
-				return {}
-
 			tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum","{}")) # type: ignore
 			current = tralbum.get('current')
 
@@ -747,7 +719,6 @@ class AlbumScraper:
 				results.extend(item for item in fetched if item)
 
 				pbar.update(len(urls_to_process))
-				pbar.update(len(urls_to_process))
 				if len(self.album_urls) > (pbar.total or 0):
 					pbar.total = len(self.album_urls)
 					pbar.refresh()
@@ -759,7 +730,6 @@ class AlbumScraper:
 		finally:
 			pbar.close()
 			if not results:
-				log.info("No new or updated albums found.")
 				log.info("No new or updated albums found.")
 			log.info(
 				f"Finished fetching urls in {time.time() - start_time:.4f} seconds: "
