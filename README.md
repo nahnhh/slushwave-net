@@ -40,9 +40,9 @@ This is a web of all releases on bandcamp tagged with slushwave coming from all 
 	}
 	```
 * Backup files:
-    - [bc_scraper_study.ipynb](bc_scraper_study.ipynb): The first file I made to figure out where and how to fetch the elements inside the Bandcamp music/album page.
-    - [parse_album_page old.py](parse_album_page old.py): The first python file I made, compiled from the notebook. Works minimally: `AlbumScraper` handles both release data + track art urls fetching, no cache files implemented, could only fetch from album urls. Great start for a fork.
-    - [Notes.md](Notes.md): A checklist & log of what I've done with the project :D
+    - [bc_scraper_study.ipynb](backup/bc_scraper_study.ipynb): The first file I made to figure out where and how to fetch the elements inside the Bandcamp music/album page.
+    - [parse_album_page old.py](backup/parse_album_page%20old.py): The first python file I made, compiled from the notebook. Works minimally: `AlbumScraper` handles both release data + track art urls fetching, no cache files implemented, could only fetch from album urls. Great start for a fork.
+    - [Notes.md](backup/Notes.md): A checklist & log of what I've done with the project :D
 
 ## The code: `parse_music_page.py`
 
@@ -61,7 +61,7 @@ The whole html fetching runs on `AsyncSession` (from `async_tls_client`) and `Be
 
 ### `ArtworkScraper`
 This runs after `AlbumScraper` and reads release data from `albums.jsonl`. Returns `art_release_ids.jsonl` and `artworks.jsonl` - both are read upon class initiation.
-- `_get_art_id_from_url()`: Track url -> soup -> `datatr-album` -> art id
+- `_get_art_id_from_url()`: Track url -> soup -> datatr-album -> art id
 - `_fetch_artwork_data()`: Art id url -> hash -> color palette
 - `_scrape_unique_artworks()`: Extract album + track art ids from 1 release record in albums.jsonl.
 
