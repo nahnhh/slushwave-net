@@ -263,8 +263,6 @@ class ArtworkScraper:
 		"""Get (track) art id from data-tralbum."""
 		try:
 			soup = await self.s.fetch(url)
-			if not soup:
-				return None
 			tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum", {}))
 			return tralbum.get('art_id')
 		except Exception:
@@ -275,8 +273,6 @@ class ArtworkScraper:
 		"""Get artwork, hash, color palette and dominant color from art id."""
 		# --- Get artwork & hash ---
 		r = await self.s.get(ARTWORK_URL.format(art_id=art_id))
-		if not r:
-			return None
 		img = r.content
 		img_hash = hashlib.blake2b(img,digest_size=8).hexdigest() # type: ignore
 		if img_hash in self.artworks:
