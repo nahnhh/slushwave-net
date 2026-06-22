@@ -1,35 +1,110 @@
 ### Things to do
 [x] Create a Python script to scrape source data from the list: artist, album, year, image -> albums.json
 [x] Use `color-thief-py` to get dominant color of album -> artworks.json
-[ ] Add other album urls in description/credits to URL scraping queue
-[ ] Change `artworks.jsonl` to `{img_hash, art_id {album1:[art_id], album2:[.]}, ...}`
+[x] Add other album urls in description/credits to URL scraping queue
+[x] Rework `artworks.jsonl` to be intuitive
 [ ] Assign color to node, display all nodes around a color wheel (OKLCH)
 [ ] Add other album urls in description/credits to URL scraping queue
-[ ] Change `artworks.jsonl` to `{img_hash, art_id {album1:[art_id], album2:[.]}, ...}`
 [ ] Assign color to node, display all nodes around a color wheel (OKLCH)
 [ ] HTML & CSS to create the site (neocities)
 
-### Info to scrape from artist list --> Compile `source.json` file
-From the bandcamp artist's *Music* site, the scraper can find info for:
-- artist(s)
-- alias
-- album
-- url: url of album
-- image: image filename
-However, still have to iterate through each *album* site for:
-- release year
-- tracklist
-- runtime
-
 ### Log
+#### 22/05/26: AI explains logic behind building `artworks.jsonl` and `art_release_date.jsonl`
+1. Build `artworks.jsonl`: Lookup artwork data via hash.
+- `self.artworks` is cache. Each new record is appended to this, and in the end the `.values()` is saved to file `artworks.jsonl`.
+```json
+self.artworks = {
+    "AAA": {
+        "img_hash": "AAA",
+        "dom_color": ...,
+        "palette": ...,
+        "in_release": [] -> gets appended after
+    },
+    "BBB": {
+        ...
+    }
+}
+```
+- `art_id_to_hash` is a temporary dict to store art_id-hash pairs of all the artworks in the release. 
+```json
+art_id_to_hash = {
+    "art_id1": "AAA",
+    "art_id2": "AAA",
+    "art_id3": "BBB",
+	...
+}
+```
+2. Build `art_release_date.jsonl`: Lookup all artworks in a release.
+- When assigning `release_art_hash = art_id_to_hash[release_art_id]` -> Lookup release art id to get `hashA`
+- `artworks` is inside `art_release_date`, it looks like:
+```json
+{
+    "AAA": {
+        "art_id": [111],
+        "track_num": [0]
+    },
+    "BBB": {
+        "art_id": [333],
+        "track_num": [4,5]
+    }
+}
+```
+- Final structure of record in `art_release_date.jsonl`
+```json
+{
+  "release_id": 999,
+  "url": "...",
+  "mod_date": "...",
+  "artworks": {
+    "AAA": {
+      "art_id": [111],
+      "track_num": [0]
+    },
+    "BBB": {
+      "art_id": [333],
+      "track_num": [4,5]
+    }
+  }
+}
+```
+
+#### 20/06/26: Added checks for "You are being directed"
+- Todos: 
+	+ What I'm trying to do with `mod_date`: When a release receives updates, rescan the whole album. If artworks is the same, overwrite only `mod_date`. Otherwise, append a new record with the new `mod_date` and `artworks`, keep the old record.
+	+ Combine `album_mod_dates` and `art_release_ids` to `art_ids_date`: `{url, track_urls: [], artworks: [], mod_date}`
+	+ Temporary patch: code to lookup `release_id` from `art_release_ids` in `albums.jsonl`, fetch `url`, `track_urls`, `mod_date` to create new record for `art_ids_date`:
+	```json
+	{
+		"release_id": 123,
+		"url": "...",
+		"mod_date": "...",
+		"artworks": {
+			"hashA": {
+				"art_id": [111],
+				"track_num": [0,1,2,3] # 0 = release art
+			},
+			"hashB": {
+				"art_id": [444],
+				"track_num": [4]
+			},
+		},
+	}
+	```
+
 #### 17/06/26: Need to fix album_scraper's cache again, it's broken lol
+- Okay fixed, need to add date_fetched back to `artworks.jsonl`
+- Todos:
+	+ 3 Question-Answer functions
+	1. In `artworks.jsonl`: *Where else is this artwork used?*
+	2. In `albums.jsonl`: *If I click on a release, what metadata should it show?*
+	3. In `art_ids.jsonl`: *What are the unique artworks in this release?*
 
 #### 16/06/26: Take into account of singles = 1-track release
 - Get numTracks = 1 for singles: `num_tracks = schema.get('numTracks') or schema.get('inAlbum',{}).get('numTracks') or 0`
 - Working on `ArtworkScraper` now:
 	+ Parse base url with track urls -> track soup -> img -> img.content -> hash
 	+ [track_urls] perserves order of tracks -> use order as `track_num`
-	+ In `art_ids.jsonl`: *What are the unique artworks in this release?*
+	+ In `art_release_ids.jsonl`: *What are the unique artworks in this release?*
 	```json
 	{
 		"release_id": 123,
@@ -51,7 +126,8 @@ However, still have to iterate through each *album* site for:
 		"img_hash": "hashA",
 		"dom_color": "...",
 		"palette": [...],
-		"in_release": ["release_id1","release_id2",...]
+		"in_release": ["release_id1","release_id2",...],
+		"date_fetched": "11 Jun 2026 12:22:14 VNT"
 	}
 	```
 art_ids.jsonl
@@ -65,6 +141,7 @@ artworks.jsonl
     palette
     dom_color
     in_release
+	date_fetched
 
 #### 13/06/26: New workflow for `parse_album_page` - `main()`
 1. URL Discovery: URL -> soup -> url, schema, tralbum -> pass to `extract_alt_album_urls(schema)` -> `queue.put_nowait(alt_url)` -> store to `parsed_pages[url] = {schema, album}
@@ -170,3 +247,16 @@ best = max(
 		key=lambda rgb: oklch_chroma(rgb)
 )
 ```
+
+#### 06/06/26 Info to scrape from artist list --> Compile `source.json` file
+Note: `good_profiles.json` is derived from `firefox_profiles.py`. It's a cache file of all the profiles that has been tested fit for scraping without returning 404's.
+From the bandcamp artist's *Music* site, the scraper can find info for:
+- artist(s)
+- alias
+- album
+- url: url of album
+- image: image filename
+However, still have to iterate through each *album* site for:
+- release year
+- tracklist
+- runtime

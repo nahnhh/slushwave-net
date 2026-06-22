@@ -1,40 +1,36 @@
 import asyncio
-import aiofiles
-from io import BytesIO
+import hashlib
 import json
 import os
 import random
 import re
-import hashlib
 import time
+from async_tls_client import AsyncSession
+from bs4 import BeautifulSoup
 from collections import defaultdict
-from tqdm import tqdm
-from typing import Any, Dict, List, Optional
-import pandas as pd
+from coloraide import Color
+from colorthief import ColorThief
 from datetime import timedelta, datetime
 from firefox_profiles import FINGERPRINTS
-from bs4 import BeautifulSoup
-from async_tls_client import AsyncSession
-from colorthief import ColorThief
-from coloraide import Color
-
-import warnings
-warnings.filterwarnings('ignore')
+from io import BytesIO
 from pathlib import Path
+from tqdm import tqdm
+
 import logging
 from rich.logging import RichHandler
 
 FORMAT = '%(message)s'
 logging.basicConfig(
-		level="INFO", format=FORMAT, datefmt="[%X]", handlers=[RichHandler()]
+	level="INFO", format=FORMAT, datefmt="[%X]", handlers=[RichHandler()]
 )
 log = logging.getLogger('rich')
 
 GOOD_PROFILES = Path("good_profiles.json")
-LINKS_FILE = "slushwave-bandcamp-links.txt"
+LINKS_FILE_COPY = Path("slushwave-bandcamp-links copy.txt")
 ALBUM_MOD_DATES_JSON = Path("album_mod_dates.json")
 ALBUMS_JSONL = Path("albums.jsonl")
-ART_IDS_JSONL = Path("art_ids.jsonl")
+ARTISTS_SLUSHWAVE_JSONL = Path("all_slushwave_artists.jsonl")
+ART_RELEASE_DATE_JSONL = Path("art_release_date.jsonl")
 ARTWORKS_JSONL =  Path("artworks.jsonl")
 TEST_URL = "https://giftsfromhome.bandcamp.com/album/-"
 ARTWORK_URL = "https://f4.bcbits.com/img/a{art_id}_3"
@@ -42,11 +38,6 @@ ALBUM_URL = re.compile(r"https://[a-zA-Z0-9-]+\.bandcamp\.com/album/\S+")
 SINGLE_URL = re.compile(r"https://[a-zA-Z0-9-]+\.bandcamp\.com/track/\S+")
 
 # --- STARTUP TEST PROFILES ---
-class ClientChallenge(Exception):
-	pass
-class IsntHere(Exception):
-	pass
-
 async def _test_profile(profile):
 	s = AsyncSession(client_identifier=profile)
 	try:
@@ -57,20 +48,20 @@ async def _test_profile(profile):
 
 	except Exception:
 		return profile, True
-	
+
 async def _get_good_profiles():
 	tasks = [_test_profile(profile) for profile in FINGERPRINTS]
 	results = await asyncio.gather(*tasks, return_exceptions=False)
-	failed = []
 	good = []
 	for profile, challenged in results:
 		if challenged:
-			failed.append(profile)
+			continue
 		else:
 			good.append(profile)
-	return good, failed
+	return good
 
 async def get_ok_clients(skip=True):
+	"""Test client identifiers for possible Client Challenge."""
 	if GOOD_PROFILES.exists():
 		use_cache = skip or (
 			input("Retest client identifiers? [y/N]: ").strip().lower() != "y"
@@ -78,72 +69,108 @@ async def get_ok_clients(skip=True):
 		if use_cache:
 			with open(GOOD_PROFILES) as f:
 				return json.load(f)
-
-	log.info("Testing client identifiers...")
-	ok_clients, _ = await _get_good_profiles()
+	ok_clients = await _get_good_profiles()
 	with open(GOOD_PROFILES, "w") as f:
 		json.dump(ok_clients, f)
+	log.info(f"Tested client identifiers, cached {len(ok_clients)} good profiles")
 	return ok_clients
 
 # --- TLS CLIENT ASYNC SESSION ---
+class TooManyRequests(Exception):
+	pass
+class IsntHere(Exception):
+	pass
+class ClientChallenge(Exception):
+	pass
 
 class BrowserSession:
-	def __init__(self, ok_clients: list, sem=150):
+	def __init__(self, ok_clients: list, sem=50, requests_per_sec=10):
 		self.ok_clients = ok_clients
-		self.requests_made = 0
-		self.sem = asyncio.Semaphore(sem)
-		self.session_lock = asyncio.Lock()
-		self.new_session()
-		self.retire_after = random.randint(40, 100)
-
-	def rotate_client(self):
 		self.client_identifier = random.choice(self.ok_clients)
+		self.new_session()
+		self.rate_lock = asyncio.Lock()
+		self.sem = asyncio.Semaphore(sem)
+		self.last_request = 0.0
+		self.min_interval = 1 / requests_per_sec
 
 	def new_session(self):
-		self.rotate_client()
-
 		self.session = AsyncSession(
 			client_identifier=self.client_identifier,
 			random_tls_extension_order=True
 		)
-
 		self.session.proxies.update({
 			"http": os.getenv("mobileproxyuk"),
 			"https": os.getenv("mobileproxyuk"),
 		})
-
 		self.session.headers.update({
 			"Referer": "https://bandcamp.com/",
 			"Accept-Language": "en-US,en;q=0.9",
 		})
 
+	async def _wait_for_rate_limit(self):
+		async with self.rate_lock:
+			now = time.monotonic()
+			wait = self.min_interval - (now - self.last_request)
+			if wait > 0:
+				await asyncio.sleep(wait)
+			self.last_request = time.monotonic()
+
 	async def get(self, url, **kwargs):
-		async with self.sem:
-			async with self.session_lock:
-				if self.requests_made >= self.retire_after:
-					self.new_session()
-					self.requests_made = 0
-					self.retire_after = random.randint(40, 100)
-				session = self.session
-				self.requests_made += 1
-			return await session.get(url,**kwargs)
+		"""Get response from URL, handles rate limiting with 3 attempts."""
+		for attempt in range(3):
+			try:
+				async with self.sem:
+					await self._wait_for_rate_limit()
+					r = await self.session.get(url, **kwargs)
+				if r.status_code == 429:
+					backoff = random.uniform(
+						7 * (attempt + 1),
+						14 * (attempt + 1)
+					)
+					log.warning(
+						f"429 ({attempt+1}/3), sleeping {backoff:.1f} seconds"
+					)
+					await asyncio.sleep(backoff)
+					continue
+				return r
+			except Exception:
+				if attempt < 2:
+					await asyncio.sleep(2 * (attempt + 1))
+					continue
+				raise
+		raise TooManyRequests
 	
-	async def fetch(self, url):
-		"""Fetch soup from url + Client Challenge + Non existent page exception"""
-		try:
-			r = await self.get(url)
-			if r.status_code == 404:
-				raise IsntHere
-			soup = BeautifulSoup(r.text or "", "lxml")
-			title = soup.title.get_text(strip=True) if soup.title else ""
-			if title == "Client Challenge":
-				raise ClientChallenge
-			return soup
-		except ClientChallenge:
-			log.warning(f"Client Challenge with {self.client_identifier} - Couldn't fetch {url}")
-			return None
-		except IsntHere:
+	async def _check_response(self, url):
+		"""Checks response for 404 or Client Challenge"""
+		r = await self.get(url)
+		if r.status_code == 404:
 			log.info(f"SKIP: Page isn't here {url}")
+			return None
+		soup = BeautifulSoup(r.text or "", "lxml")
+		title = soup.title.get_text(strip=True) if soup.title else ""
+		if title == "Client Challenge":
+			raise ClientChallenge
+		if title == "Bandcamp":
+			raise IsntHere
+		return soup	
+
+	async def fetch(self, url):
+		"""Fetch soup from URL response."""
+		try:
+			soup = await self._check_response(url)
+			if soup:
+				a = soup.select_one("body a[href]")
+				if (a and soup.body and 
+					soup.body.get_text().startswith("You are being redirected")):
+					redirect_url = a["href"]
+					log.info(f"Redirect {url} -> {redirect_url}")
+					soup = await self._check_response(redirect_url)
+				return soup
+		except ClientChallenge:
+			log.warning(f"Client Challenge: {url}")
+			return None
+		except TooManyRequests:
+			log.warning(f"Too many requests after retries: {url}")
 			return None
 		except Exception:
 			log.exception(f"Failed: {url}")
@@ -151,10 +178,11 @@ class BrowserSession:
 
 
 # --- FUNCTIONS TO USE ---
-def unique(input_list):
-	return list(set(input_list))
+def split_to_batches(items, batch_size=8):
+	for i in range(0, len(items), batch_size):
+		yield items[i:i + batch_size]
 
-def nozero(text: Any) -> str:
+def nozero(text) -> str:
 	if text is None:
 		return ""
 	text = str(text)
@@ -164,16 +192,14 @@ def rgb_to_oklch(rgb):
 	r, g, b = rgb
 	c = Color("srgb", [r / 255, g / 255, b / 255]).convert("oklch")
 	l, chroma, hue = c.coords()
-
 	return {
 		"l": round(l, 4),
 		"c": round(chroma, 4),
 		"h": round(hue or 0, 2)
 	}
 
-def pick_dominant_oklch(palette):
+def pick_dominant_color(palette):
 	candidates = []
-
 	for rgb in palette:
 		oklch = rgb_to_oklch(rgb)
 		# discard near-black / near-white colors
@@ -188,20 +214,30 @@ def pick_dominant_oklch(palette):
 
 
 # --- PHASE (2) BUILD ART_IDS.JSONL + (3) ARTWORKS.JSONL ---
-# --- Release results from AlbumScraper -> hash, dominant color, palette ---
+# Release results from AlbumScraper -> hash, dominant color, palette
 class ArtworkScraper:
-	def __init__(self, session_or_clients, sem=150, use_cache=True):
+	def __init__(self, session_or_clients, sem=50, use_cache=True):
 		if isinstance(session_or_clients, BrowserSession):
 			self.s = session_or_clients
 		else:
 			self.s = BrowserSession(session_or_clients, sem)
 		self.use_cache = use_cache
+		self.art_release_date = {}
 		self.artworks = {}		# artworks metadata created
+		self._load_cache()
 
 	def _load_cache(self):
-		"""Load image hashes to dedup later."""
-		if not self.use_cache or not ARTWORKS_JSONL.exists():
+		"""Loads records to skip later."""
+		if not self.use_cache:
 			return
+		with open(ART_RELEASE_DATE_JSONL, "r", encoding="utf-8") as f:
+			for line in f:
+				try:
+					record = json.loads(line)
+					release_id = record["release_id"]
+					self.art_release_date[release_id] = record
+				except Exception:
+					continue
 		with open(ARTWORKS_JSONL, "r", encoding="utf-8") as f:
 			for line in f:
 				try:
@@ -211,27 +247,26 @@ class ArtworkScraper:
 				except Exception:
 					continue
 
-	def _load_release_data(self, file_or_list=ALBUMS_JSONL):
+	def _load_release_data(self, file_or_list=ALBUMS_JSONL) -> list:
 		"""
 		Return a list of release records created by AlbumScraper.
 		Accepts:
-			- albums.jsonl path
-			- list returned from scrape_all_albums()
+			- albums.jsonl
+			- list returned from AlbumScraper.scrape_all_albums()
 		"""
-		if isinstance(file_or_list, list):
-			return file_or_list
-		with open(file_or_list, "r", encoding="utf-8") as f:
-			return [json.loads(line) for line in f if line.strip()]
+		if isinstance(file_or_list, (str, Path)):
+			with open(file_or_list, "r", encoding="utf-8") as f:
+				return [json.loads(line) for line in f if line.strip()]
+		return list(file_or_list)
 
 	async def _get_art_id_from_url(self, url):
 		"""Get (track) art id from data-tralbum."""
-		soup = await self.s.fetch(url)
 		try:
-			tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum", {})) # type: ignore
-			art_id = tralbum.get('art_id')
-			return art_id
+			soup = await self.s.fetch(url)
+			tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum", {}))
+			return tralbum.get('art_id')
 		except Exception:
-			log.exception(f"Couldn't fetch data-tralbum from {url}")
+			log.exception(f"Couldn't fetch art id from {url}")
 			return None
 	
 	async def _fetch_artwork_data(self, art_id):
@@ -248,46 +283,52 @@ class ArtworkScraper:
 		# --- Get palette & dominant color ---
 		ct = ColorThief(BytesIO(img)) # type: ignore
 		palette = ct.get_palette(color_count=9, quality=10)
-		dom_color = pick_dominant_oklch(palette)
 
 		return {
 			"img_hash": img_hash,
 			"art_id": art_id,
-			"dom_color": dom_color,
+			"dom_color": pick_dominant_color(palette),
 			"palette": [f"#{r:02X}{g:02X}{b:02X}" for r, g, b in palette],
 			"date_fetched": datetime.now().strftime("%d %b %Y %H:%M:%S VNT")
 		}
 
 	async def _scrape_unique_artworks(self, release):
 		"""
-		Extract album + track art ids from 1 Release record in albums.jsonl.
+		Extract album + track art ids from 1 record of a release in albums.jsonl.
 		Adds 1 record to self.artworks -> artworks.jsonl.
-		Returns 1 record for art_ids.jsonl.
+		Returns 1 record for art_release_date.jsonl.
 		"""
 		# --- Fetch track art ids ---
 		url = release["url"]
+		log.info(f"Fetching artworks from {url}")
 		track_num_by_art_id = defaultdict(list)
-		if ALBUM_URL.match(url):
-			base_url = url.rsplit("/album/",1)[0]
-			track_urls = [t if t.startswith("http") else base_url + t
-							for t in release.get("track_urls", [])]
-			track_art_ids = await asyncio.gather(
-				*(self._get_art_id_from_url(u) for u in track_urls)
-			)
-			# --- Get track numbers ---
-			release_art_id = release["album_art_id"]
-			for track_num, art_id in enumerate(track_art_ids,start=1):
-				if art_id:
-					track_num_by_art_id[art_id].append(track_num)
-			# --- Fetch unique artworks from art ids ---
-			unique_art_ids = {release_art_id, *filter(None, track_art_ids)}
-			artworks = await asyncio.gather(
-				*(self._fetch_artwork_data(art_id)
-					for art_id in unique_art_ids)
-			)
-		else: # SINGLE URL
-			release_art_id = await self._get_art_id_from_url(url)
-			artworks = [await self._fetch_artwork_data(release_art_id)]
+		try:
+			if ALBUM_URL.match(url):
+				base_url = url.rsplit("/album/",1)[0]
+				track_urls = [t if t.startswith("http") else base_url + t
+								for t in release["track_urls"]]
+				t0 = time.time()
+				track_art_ids = await asyncio.gather(
+					*(self._get_art_id_from_url(u) for u in track_urls)
+				)
+				log.info(f"Fetched {set(track_art_ids)} in {time.time() - t0:.2f} seconds")
+				# --- Get track numbers ---
+				release_art_id = release["album_art_id"]
+				for track_num, track_art_id in enumerate(track_art_ids,start=1):
+					if track_art_id:
+						track_num_by_art_id[track_art_id].append(track_num)
+				# --- Fetch unique artworks from art ids ---
+				unique_art_ids = {release_art_id, *filter(None, track_art_ids)}
+				artworks = await asyncio.gather(
+					*(self._fetch_artwork_data(art_id)
+						for art_id in unique_art_ids)
+				)
+			else: # SINGLE URL
+				release_art_id = await self._get_art_id_from_url(url)
+				artworks = [await self._fetch_artwork_data(release_art_id)]
+		except Exception:
+			log.exception(f"Artwork scrape failed for {url}")
+			return None
 
 		# --- Build artworks.jsonl: Lookup artwork data via hash ---
 		art_id_to_hash = {}
@@ -295,132 +336,190 @@ class ArtworkScraper:
 			if not art:
 				continue
 			h = art["img_hash"]
-			art_id_to_hash[art["art_id"]] = h
-
-			if "palette" in art and h not in self.artworks:
+			art_id_to_hash[art["art_id"]] = h	 # {art_id1: hashA}
+			if "date_fetched" in art and h not in self.artworks:
 				self.artworks[h] = {
 					"img_hash": h,
 					"dom_color": art["dom_color"],
 					"palette": art["palette"],
-					"in_release": []
+					"in_release": [],
+					"date_fetched": art["date_fetched"]
 				}
 
-		# --- Build art_ids.jsonl: Lookup all artworks in a release ---
-		release_id = release["album_id"]
+		release_id = release["album_id"]		# for hash already in self.artworks
 		for h in set(art_id_to_hash.values()):
 			if release_id not in self.artworks[h]["in_release"]:
 				self.artworks[h]["in_release"].append(release_id)
-		
+	
+		# --- Build art_release_date.jsonl: Lookup all artworks in a release ---
 		artworks = {}
 		release_art_hash = art_id_to_hash[release_art_id]
 		artworks[release_art_hash] = {
 			"art_id": [release_art_id],
 			"track_num": [0] # release/album art = track 0
 		}
-		for art_id, track_nums in track_num_by_art_id.items():
-			if art_id == release_art_id:
-				continue
-			h = art_id_to_hash[art_id]
+		for track_art_id, track_nums in track_num_by_art_id.items():
+			if track_art_id == release_art_id:
+				continue 	# skip tracks that shares release art id
+			h = art_id_to_hash[track_art_id]
 			if h not in artworks:
 				artworks[h] = {
 					"art_id": [],
 					"track_num": []
-				}
-			artworks[h]["art_id"].append(art_id)
+				} 	# create dict for each new hash, append after
+			artworks[h]["art_id"].append(track_art_id)
 			artworks[h]["track_num"].extend(track_nums)
-		return {
-			"release_id": release["album_id"],
-			"artworks": artworks,
+		record = {
+			"release_id": release_id,
+			"url": url,
+			"mod_date": release["mod_date"],
+			"artworks": artworks
 		}
+		self.art_release_date[release_id] = record
+		return record
 	
 	async def scrape_all_artworks(self, file_or_list):
 		releases = self._load_release_data(file_or_list)
 		results = []
-		async def worker(release, pbar):
-			try:
-				result = await self._scrape_unique_artworks(release)
-				results.append(result)
-			except Exception:
-				log.exception(f"Artwork scrape failed for {release['url']}")
-			finally:
-				pbar.update(1)
-
+		tasks = [self._scrape_unique_artworks(release)
+				 for release in releases]
 		with tqdm(total=len(releases), desc="Artworks", unit="album") as pbar:
-			async with asyncio.TaskGroup() as tg:
-				for release in releases:
-					tg.create_task(worker(release, pbar))
-
+			for future in asyncio.as_completed(tasks):
+				result = await future
+				if result:
+					results.append(result)
+				pbar.update(1)
+				pbar.set_postfix(
+					art_ids_date=len(results),
+					artworks=len(self.artworks),
+				)
 		return results
 
 	def save_results(self, results):
-		with open(ART_IDS_JSONL, "w", encoding="utf-8") as f:
-			for record in results:
+		# update release cache
+		for record in results:
+			self.art_release_date[record["release_id"]] = record
+		# write release cache
+		with open(ART_RELEASE_DATE_JSONL, "w", encoding="utf-8") as f:
+			for record in self.art_release_date.values():
 				f.write(json.dumps(record, ensure_ascii=False) + "\n")
+		# write artwork cache
 		with open(ARTWORKS_JSONL, "w", encoding="utf-8") as f:
-			for artwork in self.artworks.values():
-				f.write(json.dumps(artwork, ensure_ascii=False) + "\n")
-		log.info(
-			f"Saved {len(results)} art_id records "
-			f"and {len(self.artworks)} artwork records"
-		)
+			for record in self.artworks.values():
+				f.write(json.dumps(record, ensure_ascii=False) + "\n")
 		
 # --- PHASE (0) URL DISCOVERY + (1) PARSE ALBUM DATA ---
-# --- Artist urls (Music pages) list -> Music page soup -> Album urls -> Album soup -> schema, tralbum -> Album data + Track urls ---
+# Artist urls (Music pages) list -> Album urls -> schema, tralbum -> Album data + Track urls + Other album urls in credits/desc.
 class AlbumScraper:
-	def __init__(self, session_or_clients, sem=150, use_cache=False):
+	def __init__(self, session_or_clients, sem=150, use_cache=True, skip_mode="historical"): # "historical" | "stale" 
 		if isinstance(session_or_clients, BrowserSession):
 			self.s = session_or_clients
 		else:
 			self.s = BrowserSession(session_or_clients, sem)
-		self.mod_dates = {}
-		self.album_urls = set()
 		self.use_cache = use_cache
+		self.skip_mode = skip_mode
+		self.mod_dates = {}
+		self.artists_slushwave = {}
+		self.albums = {}
+		self.album_urls = set()
+		self._load_cache()
 
 	def _load_cache(self):
-		"""Load {url: mod_date} to check for stale albums later."""
-		if not self.use_cache or not ALBUM_MOD_DATES_JSON.exists():
+		if not self.use_cache:
 			return
-		with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
-			self.mod_dates = json.load(f)
+		if ARTISTS_SLUSHWAVE_JSONL.exists():
+			with open(ARTISTS_SLUSHWAVE_JSONL, "r", encoding="utf-8") as f:
+				for line in f:
+					try:
+						record = json.loads(line)
+						artist_url = record["artist_url"].rstrip("/")
+						slushwave = record.get("slushwave", [])
+						not_slushwave = record.get("not_slushwave", [])
+						self.artists_slushwave[artist_url] = {
+							"artist_url": artist_url,
+							"slushwave": slushwave,
+							"not_slushwave": not_slushwave,
+						}
+					except Exception:
+						continue
+		if ALBUMS_JSONL.exists():
+			with open(ALBUMS_JSONL, "r", encoding="utf-8") as f:
+				for line in f:
+					try:
+						album = json.loads(line)
+						self.albums[album["album_id"]] = album
+					except Exception:
+						continue
+		if ALBUM_MOD_DATES_JSON.exists():
+			with open(ALBUM_MOD_DATES_JSON, "r", encoding="utf-8") as f:
+				self.mod_dates = json.load(f)
 
 	# --- 0. Read from artist list -> music page soup -> album urls ---
-	async def _fetch_albums_from_artist(self, artist_url) -> set[str]:
+	def _should_skip_release(self, artist_url: str, rel_url: str) -> bool:
+		cached = self.artists_slushwave.get(artist_url, {})
+		if self.skip_mode == "historical":
+			return (
+				rel_url in cached.get("slushwave", [])
+				or rel_url in cached.get("not_slushwave", [])
+			)
+		if self.skip_mode == "stale":
+			return rel_url in cached.get("not_slushwave", [])
+		return False
+
+	async def _fetch_releases_from_artist(self, artist_url) -> set[str]:
 		"""Get response & soup from Music page -> extract album urls"""
-		artist_url = artist_url.rstrip("/")
+		artist_root = artist_url.removesuffix("/music")
+		await asyncio.sleep(random.uniform(0.5,1))
 		soup = await self.s.fetch(artist_url)
-		if soup is None:
+		if not soup:
 			return set()
 		links = (
 			soup.select("li.music-grid-item a[href]")
 			or soup.select("div.ipCellImage a[href]")
 		)
-		album_urls = {
-			href if href.startswith("http") # type: ignore
-			else artist_url + href
-			for href in (a["href"] for a in links)
+		release_urls = {
+			a["href"] for a in links
+			if not self._should_skip_release(artist_root, a["href"])
 		}
-		return album_urls # type: ignore
+		if not release_urls:
+			log.info(f"SKIP: No new releases by {artist_root}")
+			return set()
 
-	async def get_all_album_urls(self, file_or_list=LINKS_FILE):
+		album_urls = {rel if rel.startswith("http") 
+					else artist_root + rel 
+					for rel in release_urls}
+		return album_urls
+
+	async def get_all_release_urls(self, file_or_list):
 		"""
-		Get all album urls from a .txt file with all links listed.
-			+) Music (artist) page url -> music soup -> extract album urls, update to result
-			+) Album page url -> skip
+		Get all album urls from a .txt file or a list with all links.
+			+) Music/Artist page url -> get music soup -> extract album urls
+			+) Album page url -> keep directly
 		"""
-		if isinstance(file_or_list, (list,set,tuple)):
+		if isinstance(file_or_list, (list, set, tuple)):
 			urls = set(file_or_list)
 		else:
 			with open(Path(file_or_list), "r", encoding="utf-8") as f:
 				urls = {line.strip() for line in f if line.strip()}
-		album_urls = {url for url in urls if ALBUM_URL.match(url) or SINGLE_URL.match(url)}
+		album_urls = {
+			url for url in urls
+			if ALBUM_URL.match(url) or SINGLE_URL.match(url)
+		}
 		artist_urls = urls - album_urls
 		url_lists = await asyncio.gather(
-			*(self._fetch_albums_from_artist(url) for url in artist_urls),
-			return_exceptions=False
+			*(self._fetch_releases_from_artist(url.rstrip("/") + "/music") for url in artist_urls),
+			return_exceptions=True
 		)
-		album_urls.update(album_url for urls in url_lists for album_url in urls)
+		for result in url_lists:
+			if isinstance(result, Exception):
+				log.exception(
+					f"Artist page fetch failed for {result}", exc_info=result
+				)
+				continue
+			if result:
+				album_urls.update(result) # type: ignore
 		self.album_urls.update(album_urls)
-	
+
 	# --- Read album urls -> album page soup -> alt album urls + album data + track urls ---
 	def _get_alt_album_urls(self, album_schema, url=None):
 		"""Get other album urls in description/credits -> Update to {album_urls}"""
@@ -435,31 +534,37 @@ class AlbumScraper:
 			log.info(f"{len(alt_urls)} other album url found in {url}")
 		self.album_urls.update(alt_urls)
 
+	def _is_genre(self, keywords, genres=("slush","nature","ambient","dreamtone","signal","transmission","mallsoft")):
+		kw = {k.lower() for k in (keywords or [])}
+		for keyword in kw:
+			if any(genre in keyword for genre in genres):
+				return True
+		return False
+
+	def _categorize_release(self, artist_url, url, is_target):
+		"""Categorize release to either slushwave or not slushwave in all_slushwave_artists.jsonl"""
+		rel = url[len(artist_url):] if url.startswith(artist_url) else url
+		record = self.artists_slushwave.setdefault(
+			artist_url,
+			{
+				"artist_url": artist_url,
+				"slushwave": [],
+				"not_slushwave": []
+			}
+		)
+		key = "slushwave" if is_target else "not_slushwave"
+		if rel not in record[key]:
+			record[key].append(rel)
+
 	async def _scrape_album_page(self, url) -> dict:
 		"""
 		Fetch an album page, checks all skips and returns required album metadata.
-		Skips not slushwave -> Get alt album urls -> Skip no tracks -> Skip stale albums.
+		Skip stale albums -> Skips not slushwave -> Get alt album urls -> Skip no tracks
 		"""
 		try:
 			soup = await self.s.fetch(url)
 			if not soup:
 				return {}
-			schema = json.loads(soup.select_one("script[type='application/ld+json']").get_text(strip=True)) # type: ignore
-
-			# Skip non slushwave releases
-			keywords = schema.get('keywords',[])
-			if not {k.lower() for k in keywords} & {"slushwave"}:
-				log.info(f"SKIP: Not slushwave {url}")
-				return {}
-
-			self._get_alt_album_urls(schema, url)
-
-			# Skip no tracks
-			num_tracks = schema.get('numTracks') or schema.get('inAlbum',{}).get('numTracks') or 0
-			if int(num_tracks) == 0:
-				log.info(f"SKIP: No tracks in {url}")
-				return {}
-			
 			tralbum = json.loads(soup.select_one("[data-tralbum]").get("data-tralbum","{}")) # type: ignore
 			current = tralbum.get('current')
 
@@ -469,11 +574,31 @@ class AlbumScraper:
 				log.info(f"SKIP: No updates for {url}")
 				return {}
 
+			schema = json.loads(soup.select_one("script[type='application/ld+json']").get_text(strip=True)) # type: ignore
+
+			# Skip non slushwave releases
+			keywords = schema.get('keywords',[])
+			artist_url = (url.split("/album/")[0] if "/album/" in url else url.split("/track/")[0])
+			is_genre = self._is_genre(keywords)
+			self._categorize_release(artist_url, url, is_genre)
+
+			if not is_genre:
+				log.info(f"SKIP: Not target genre {url}")
+				return {}
+
+			self._get_alt_album_urls(schema, url)
+
+			# Skip no tracks
+			num_tracks = schema.get('numTracks') or schema.get('inAlbum',{}).get('numTracks') or 0
+			if int(num_tracks) == 0:
+				log.info(f"SKIP: No tracks in {url}")
+				return {}
+
 			# Get album metadata (finally)
 			release = nozero((schema['name'] or current['title'] or ""))
 			artist_name = nozero((schema['byArtist']['name'] or current['artist'] or ""))
 			track_info = tralbum.get('trackinfo')
-			track_urls = [t.get('title_link') for t in track_info]
+			track_urls = [t.get('title_link') for t in track_info if t]
 			runtime = timedelta(seconds=int(sum(t.get('duration', 0) for t in track_info)))
 
 			self.mod_dates[url] = mod_date
@@ -498,7 +623,6 @@ class AlbumScraper:
 	
 	async def scrape_all_albums(self, seed_urls=None) -> list:
 		"""Scrape albums & discover more albums on the run."""
-		start_time = time.time()
 		if seed_urls:
 			self.album_urls.update(seed_urls)
 		pbar = tqdm(total=len(self.album_urls), desc="Albums", unit="album")
@@ -506,20 +630,19 @@ class AlbumScraper:
 		processed_urls = set()
 		try:
 			while True:
-				batch = self.album_urls - processed_urls
-				if not batch:
+				urls_to_process = list(self.album_urls - processed_urls)
+				if not urls_to_process:
 					break
 				fetched = await asyncio.gather(
-					*(self._scrape_album_page(url) for url in batch))
-				processed_urls.update(batch)
+					*(self._scrape_album_page(url) for url in urls_to_process)
+				)
+				processed_urls.update(urls_to_process)
+				results.extend(item for item in fetched if item)
 
-				pbar.update(len(batch))
+				pbar.update(len(urls_to_process))
 				if len(self.album_urls) > (pbar.total or 0):
 					pbar.total = len(self.album_urls)
 					pbar.refresh()
-				
-				results.extend(item for item in fetched if item)
-
 				pbar.set_postfix(
 					known=len(self.album_urls),
 					processed=len(processed_urls),
@@ -528,78 +651,79 @@ class AlbumScraper:
 		finally:
 			pbar.close()
 			if not results:
-				log.info("No new or updated albums found. Exiting.")
+				log.info("No new or updated albums found.")
 			log.info(
-				f"Finished fetching urls in {time.time() - start_time:.4f} seconds: "
+				f"Finished fetching urls: "
 				f"{len(processed_urls)} URLs -> {len(results)} albums"
 			)
 		return results
 	
 	def save_results(self, results):
 		if self.use_cache:
-			# Load existing albums
-			albums_by_id = {}
-			if ALBUMS_JSONL.exists():
-				with open(ALBUMS_JSONL, "r", encoding="utf-8") as f:
-					for line in f:
-						try:
-							album = json.loads(line)
-							albums_by_id[album["album_id"]] = album
-						except Exception:
-							continue
-			# Apply updates
 			for album in results:
-				albums_by_id[album["album_id"]] = album
-			# Rewrite file
-			with open(ALBUMS_JSONL, "w", encoding="utf-8") as f:
-				for album in albums_by_id.values():
-					f.write(json.dumps(album, ensure_ascii=False) + "\n")
-			log.info(f"Cache mode: saved {len(results)} releases")
+				self.albums[album["album_id"]] = album
 		else:
-			with open(ALBUMS_JSONL, "w", encoding="utf-8") as f:
-				for album in results:
-					f.write(json.dumps(album, ensure_ascii=False) + "\n")
-			log.info(
-				f"Override mode: saved {len(results)} releases"
-			)
+			self.albums = {album["album_id"]: album for album in results}
+		with open(ALBUMS_JSONL, "w", encoding="utf-8") as f:
+			for album in self.albums.values():
+				f.write(json.dumps(album, ensure_ascii=False) + "\n")
+		with open(ARTISTS_SLUSHWAVE_JSONL, "w", encoding="utf-8") as f:
+			for record in self.artists_slushwave.values():
+				f.write(json.dumps(record, ensure_ascii=False) + "\n")
 		with open(ALBUM_MOD_DATES_JSON, "w", encoding="utf-8") as f:
-			json.dump(self.mod_dates,f,ensure_ascii=False,indent=2)
+			json.dump(self.mod_dates, f, ensure_ascii=False, indent=2)
 
 # ====================================
 # OKAY!!! LET'S GET THIS THING RUNNING
 # ====================================
 
 async def main():
-	start_time = time.time()
 	ok_clients = await get_ok_clients(skip=True)
-	random.seed(42)
 	s = BrowserSession(ok_clients=ok_clients)
 
 	# ---- SCRAPING ALBUMS ----
-	album_scraper = AlbumScraper(s, sem=150, use_cache=True)
 	log.info(f"Fetching album urls...")
+	# with open("slushwave-bandcamp-links copy.txt", "r", encoding="utf-8") as f:
+	# 	urls = [line.strip() for line in f if line.strip()]
 	urls = [
-		'https://itachitsukiyomi.bandcamp.com/album/-',
-		'https://geometriclullaby.bandcamp.com/album/geo-c07',
-		'https://818181.bandcamp.com/album/life-after',
-		'https://18days.bandcamp.com/album/infinite-color',
-		'https://18days.bandcamp.com/album/all-night-long-2'
+		"https://giftsfromhome.bandcamp.com/",
 	]
-	# urls = 'seed_urls.txt'
-	await album_scraper.get_all_album_urls(urls)  # type: ignore
-	results = await album_scraper.scrape_all_albums()
-	if not results:
-		log.info("No new or updated albums found. Exiting.")
-		return
-	album_scraper.save_results(results)
+	album_scraper = AlbumScraper(s, sem=8, use_cache=True, skip_mode="historical")
+
+	for batch_num, batch_urls in enumerate(split_to_batches(urls, 8), start=1):
+		start_time_batch = time.time()
+		log.info(f"Processing batch {batch_num} ({len(batch_urls)} urls)")
+		# Clear discovered URLs from previous batch
+		album_scraper.album_urls.clear()
+		await album_scraper.get_all_release_urls(batch_urls) # type: ignore
+		album_scraper.album_urls.difference_update(album_scraper.mod_dates.keys())
+		results = await album_scraper.scrape_all_albums()
+		if results:	
+			album_scraper.save_results(results)
+			log.info(f"Batch {batch_num}: saved {len(results)} albums in {time.time() - start_time_batch:.2f} seconds")
+		else:
+			log.info("No new or updated albums found.")
+		await asyncio.sleep(2)
 
 	# ---- SCRAPING ARTWORKS ----
-	# log.info(f"Fetching artworks...")
-	# artwork_scraper = ArtworkScraper(s, sem=150, use_cache=True)
-	# artworks = await artwork_scraper.scrape_all_artworks(results)
-	# artwork_scraper.save_results(artworks)
+	log.info(f"Fetching artworks...")
+	with open(ALBUMS_JSONL, "r", encoding="utf-8") as f:
+		releases = [json.loads(line) for line in f if line.strip()]
+	artwork_scraper = ArtworkScraper(s, sem=3, use_cache=True)
+	processed_ids = set(artwork_scraper.art_release_date.keys())
+	releases = [
+		release
+		for release in releases
+		if release["album_id"] not in processed_ids
+	]
+	log.info(f"Skipping {len(processed_ids)} already processed releases, "
+			 f"{len(releases)} releases to process")
+	for batch in split_to_batches(releases, batch_size=2):
+		results = await artwork_scraper.scrape_all_artworks(batch)
+		artwork_scraper.save_results(results)
 
-	log.info(f"Total time: {time.time() - start_time:.4f} seconds")
 
 if __name__ == "__main__":
+	start_time = time.time()
 	asyncio.run(main())
+	log.info(f"Total time: {time.time() - start_time:.4f} seconds")
