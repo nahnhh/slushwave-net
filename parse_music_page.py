@@ -686,7 +686,7 @@ async def main():
 	# with open("slushwave-bandcamp-links copy.txt", "r", encoding="utf-8") as f:
 	# 	urls = [line.strip() for line in f if line.strip()]
 	urls = [
-		"https://daysofblue.bandcamp.com/",
+		"https://giftsfromhome.bandcamp.com/",
 	]
 	album_scraper = AlbumScraper(s, sem=8, use_cache=True, skip_mode="historical")
 

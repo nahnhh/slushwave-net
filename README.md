@@ -1,16 +1,17 @@
 This is a web of all releases on bandcamp tagged with slushwave coming from all artists in `slushwave-bandcamp-links.txt` -- a list compiled in the Slushwave Social Club. Come join in! https://discord.gg/slushwave 
 
-# Documentation (Explaining the project for future self)
+# Documentation
+*(Explaining the project for future self)*
 
 ## The files
-* `good_profiles.json` is derived from `firefox_profiles.py` (`FINGERPRINTS`) after testing all client identifiers to remove ones that raise Client Challenge.
-* `slushwave-bandcamp-link.txt`: a list of all artists who has at least 1 release tagged with ["slush", "nature", "ambient", "dreamtone", "signal", "transmission", "mallsoft"] on Bandcamp. It was originally just "slush", but I decided to expand on my search (since slushwave or not, the album page soup has already been fetched to memory, I didn't want it to go to waste).
-* Data files generated after running `AlbumScraper`:
-    - `albums.jsonl`: Data from all releases (tagged with the target genres). Answers: *What is the info about this release?*
-    - `all_slushwave_artists.jsonl`: Used for `skipmode='historical'` (AlbumScraper cache). Supposed to store `{artist_url, slushwave: [], not_slushwave: []}` for cache, but I guess async wrote the file incomplete. Doesn't really matter though.
-	- `album_mod_dates.jsonl`: Used for `skipmode='stale'` (AlbumScraper cache). Check for last modified date of a release and update changes if any. As this is one big dictionary, it reflects an accurate number of all slushwave releases up to date.
+* [good_profiles.json](good_profiles.json) is derived from [firefox_profiles.py](firefox_profiles.py) (`FINGERPRINTS`) after testing all client identifiers to remove ones that raise Client Challenge.
+* [slushwave-bandcamp-link.txt](slushwave-bandcamp-link.txt): a list of all artists who has at least 1 release tagged with ["slush", "nature", "ambient", "dreamtone", "signal", "transmission", "mallsoft"] on Bandcamp. It was originally just "slush", but I decided to expand on my search (since slushwave or not, the album page soup has already been fetched to memory, I didn't want it to go to waste).
+* Data files generated after running AlbumScraper:
+    - [albums.jsonl](albums.jsonl): Data from all releases (tagged with the target genres). Answers: *What is the info about this release?*
+    - [all_slushwave_artists.jsonl](all_slushwave_artists.jsonl): Used for `skipmode='historical'` (AlbumScraper cache). Supposed to store {artist_url, slushwave: [], not_slushwave: []} for cache, but I guess async wrote the file incomplete. Doesn't really matter though.
+	- [album_mod_dates.jsonl](album_mod_dates.jsonl): Used for `skipmode='stale'` (AlbumScraper cache). Check for last modified date of a release and update changes if any. As this is one big dictionary, it reflects an accurate number of all slushwave releases up to date.
 * Data files generated after running `ArtworkScraper`:
-	- `art_release_date.jsonl`: Used for ArtworkScraper cache. Store `{release_id,url, mod_date, artworks: []}` -> `artworks: {hashA: {art_id: [], track_num: []}}`. Lists all the releases whose art_ids have been fetched. If an album's artwork is updated, rescan and append new record. Answers: *What are the unique artworks in this release?*
+	- [art_release_date.jsonl](art_release_date.jsonl): Used for ArtworkScraper cache. Store {release_id, url, mod_date, artworks: []}` -> `artworks: {hashA: {art_id: [], track_num: []}}. Lists all the releases whose art_ids have been fetched. If an album's artwork is updated, rescan and append new record. Answers: *What are the unique artworks in this release?*
     ```json
 	{
 		"release_id": 123,
@@ -28,7 +29,7 @@ This is a web of all releases on bandcamp tagged with slushwave coming from all 
 		}
 	}
 	```
-    - `artworks.jsonl`: Stores all artwork data `{img_hash, dom_color: {l,c,h}, palette: [8 colors in hex], in_release: [release ids]}`. Answers: *Where else is this artwork used?*
+    - [artworks.jsonl](artworks.jsonl): Stores all artwork data {img_hash, dom_color: {l,c,h}, palette: [8 colors in hex], in_release: [release ids]}. Answers: *Where else is this artwork used?*
 	```json
 	{
 		"img_hash": "hashA",
@@ -39,9 +40,9 @@ This is a web of all releases on bandcamp tagged with slushwave coming from all 
 	}
 	```
 * Backup files:
-    - `bc_scraper_study.ipynb`: The first file I made to figure out where and how to fetch the elements inside the Bandcamp music/album page.
-    - `parse_album_page old.py`: The first python file I made, compiled from the notebook. Works minimally: `AlbumScraper` handles both release data + track art urls fetching, no cache files implemented, could only fetch from album urls. Great start for a fork.
-    - `Notes.md`: A checklist & log of what I've done with the project :D
+    - [bc_scraper_study.ipynb](bc_scraper_study.ipynb): The first file I made to figure out where and how to fetch the elements inside the Bandcamp music/album page.
+    - [parse_album_page old.py](parse_album_page old.py): The first python file I made, compiled from the notebook. Works minimally: `AlbumScraper` handles both release data + track art urls fetching, no cache files implemented, could only fetch from album urls. Great start for a fork.
+    - [Notes.md](Notes.md): A checklist & log of what I've done with the project :D
 
 ## The code: `parse_music_page.py`
 
