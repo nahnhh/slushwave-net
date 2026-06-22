@@ -5,13 +5,13 @@ This is a web of all releases on bandcamp tagged with slushwave coming from all 
 
 ## The files
 * [good_profiles.json](good_profiles.json) is derived from [firefox_profiles.py](firefox_profiles.py) (`FINGERPRINTS`) after testing all client identifiers to remove ones that raise Client Challenge.
-* [slushwave-bandcamp-link.txt](slushwave-bandcamp-link.txt): a list of all artists who has at least 1 release tagged with ["slush", "nature", "ambient", "dreamtone", "signal", "transmission", "mallsoft"] on Bandcamp. It was originally just "slush", but I decided to expand on my search (since slushwave or not, the album page soup has already been fetched to memory, I didn't want it to go to waste).
+* [slushwave-bandcamp-link.txt](slushwave-bandcamp-link.txt): a list of all artists who has at least 1 release tagged with "slushwave" on Bandcamp. I decided to expand my search to include releases of adjacent genres: ["slush", "nature", "ambient", "dreamtone", "signal", "transmission", "mallsoft"] (since slushwave or not, the album page soup has already been fetched to memory, I didn't want it to go to waste).
 * Data files generated after running AlbumScraper:
     - [albums.jsonl](albums.jsonl): Data from all releases (tagged with the target genres). Answers: *What is the info about this release?*
     - [all_slushwave_artists.jsonl](all_slushwave_artists.jsonl): Used for `skipmode='historical'` (AlbumScraper cache). Supposed to store {artist_url, slushwave: [], not_slushwave: []} for cache, but I guess async wrote the file incomplete. Doesn't really matter though.
 	- [album_mod_dates.jsonl](album_mod_dates.jsonl): Used for `skipmode='stale'` (AlbumScraper cache). Check for last modified date of a release and update changes if any. As this is one big dictionary, it reflects an accurate number of all slushwave releases up to date.
-* Data files generated after running `ArtworkScraper`:
-	- [art_release_date.jsonl](art_release_date.jsonl): Used for ArtworkScraper cache. Store {release_id, url, mod_date, artworks: []}` -> `artworks: {hashA: {art_id: [], track_num: []}}. Lists all the releases whose art_ids have been fetched. If an album's artwork is updated, rescan and append new record. Answers: *What are the unique artworks in this release?*
+* Data files generated after running ArtworkScraper:
+	- [art_release_date.jsonl](art_release_date.jsonl): Used for ArtworkScraper cache. Store {release_id, url, mod_date, artworks: {}} <- artworks: {hashA: {art_id: [], track_num: []}}. Lists all the releases whose art_ids have been fetched. If an album's artwork is updated, rescan and append new record. Answers: *What are the unique artworks in this release?*
     ```json
 	{
 		"release_id": 123,
@@ -34,8 +34,8 @@ This is a web of all releases on bandcamp tagged with slushwave coming from all 
 	{
 		"img_hash": "hashA",
 		"dom_color": "...",
-		"palette": [...],
-		"in_release": ["release_id1","release_id2",...],
+		"palette": ["..."],
+		"in_release": ["release_id1","release_id2","..."],
 		"date_fetched": "11 Jun 2026 12:22:14 VNT"
 	}
 	```
@@ -66,10 +66,10 @@ This runs after `AlbumScraper` and reads release data from `albums.jsonl`. Retur
 - `_scrape_unique_artworks()`: Extract album + track art ids from 1 release record in albums.jsonl.
 
 ### `AlbumScraper`
-This runs first, fast and pretty solid! Artist urls (Music pages) list -> Music page soup -> Album urls -> Album soup -> schema, tralbum -> Album data + Track urls + Other album urls in credit/description
-- `get_all_release_urls()`: Get all album urls from a .txt file with all links listed.
+This runs first, fast and pretty solid! Reads artist urls (music pages) list -> Music page soup -> Album urls -> Album soup -> schema, tralbum -> Album data + Track urls + Other album urls in credit/description
+- `get_all_release_urls()`: Get all album urls from a .txt file or a list.
 	- Music (artist) page url -> music soup -> extract album urls
 	- Album page url -> keep directly
-- `_categorize_release`: Categorize release to either slushwave or not slushwave in all_slushwave_artists.jsonl
+- `_categorize_release`: Categorize release to either slushwave or not slushwave -> record in [all_slushwave_artists.jsonl](all_slushwave_artists.jsonl)
 - `_scrape_album_page()`: Fetch an album page, checks all skips and returns required album metadata. Skip stale albums -> Skips not slushwave -> Get alt album urls -> Skip no tracks
 - `scrape_all_albums()`: Scrape albums from a list of urls & discover more album urls on the run.
