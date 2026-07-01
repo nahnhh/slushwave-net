@@ -45,7 +45,6 @@ async def _test_profile(profile):
 		soup = BeautifulSoup(r.text, "lxml") # type: ignore
 		challenged = (soup.title and soup.title.get_text(strip=True) == "Client Challenge")
 		return profile, challenged
-
 	except Exception:
 		return profile, True
 
@@ -115,9 +114,9 @@ class BrowserSession:
 				await asyncio.sleep(wait)
 			self.last_request = time.monotonic()
 
-	async def get(self, url, **kwargs):
+	async def get(self, url, attempts=4, **kwargs):
 		"""Get response from URL, handles rate limiting with 3 attempts."""
-		for attempt in range(3):
+		for attempt in range(attempts):
 			try:
 				async with self.sem:
 					await self._wait_for_rate_limit()
@@ -128,7 +127,7 @@ class BrowserSession:
 						14 * (attempt + 1)
 					)
 					log.warning(
-						f"429 ({attempt+1}/3), sleeping {backoff:.1f} seconds"
+						f"429 ({attempt+1}/{attempts}), sleeping {backoff:.1f} seconds"
 					)
 					await asyncio.sleep(backoff)
 					continue
@@ -300,7 +299,6 @@ class ArtworkScraper:
 		"""
 		# --- Fetch track art ids ---
 		url = release["url"]
-		log.info(f"Fetching artworks from {url}")
 		track_num_by_art_id = defaultdict(list)
 		try:
 			if ALBUM_URL.match(url):
@@ -311,7 +309,6 @@ class ArtworkScraper:
 				track_art_ids = await asyncio.gather(
 					*(self._get_art_id_from_url(u) for u in track_urls)
 				)
-				log.info(f"Fetched {set(track_art_ids)} in {time.time() - t0:.2f} seconds")
 				# --- Get track numbers ---
 				release_art_id = release["album_art_id"]
 				for track_num, track_art_id in enumerate(track_art_ids,start=1):
@@ -319,6 +316,7 @@ class ArtworkScraper:
 						track_num_by_art_id[track_art_id].append(track_num)
 				# --- Fetch unique artworks from art ids ---
 				unique_art_ids = {release_art_id, *filter(None, track_art_ids)}
+				log.info(f"Fetched {unique_art_ids} in {time.time() - t0:.2f} seconds from from {url}")
 				artworks = await asyncio.gather(
 					*(self._fetch_artwork_data(art_id)
 						for art_id in unique_art_ids)
@@ -683,11 +681,11 @@ async def main():
 
 	# ---- SCRAPING ALBUMS ----
 	log.info(f"Fetching album urls...")
-	# with open("slushwave-bandcamp-links copy.txt", "r", encoding="utf-8") as f:
-	# 	urls = [line.strip() for line in f if line.strip()]
-	urls = [
-		"https://giftsfromhome.bandcamp.com/",
-	]
+	with open("slushwave-bandcamp-links copy.txt", "r", encoding="utf-8") as f:
+		urls = [line.strip() for line in f if line.strip()]
+	# urls = [
+	# 	"https://giftsfromhome.bandcamp.com/",
+	# ]
 	album_scraper = AlbumScraper(s, sem=8, use_cache=True, skip_mode="historical")
 
 	for batch_num, batch_urls in enumerate(split_to_batches(urls, 8), start=1):
