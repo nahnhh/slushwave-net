@@ -4,8 +4,6 @@
 [x] Add other album urls in description/credits to URL scraping queue
 [x] Rework `artworks.jsonl` to be intuitive
 [ ] Assign color to node, display all nodes around a color wheel (OKLCH)
-[ ] Add other album urls in description/credits to URL scraping queue
-[ ] Assign color to node, display all nodes around a color wheel (OKLCH)
 [ ] HTML & CSS to create the site (neocities)
 
 ### Log
