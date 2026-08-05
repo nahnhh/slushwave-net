@@ -683,11 +683,11 @@ async def main():
 
 	# ---- SCRAPING ALBUMS ----
 	log.info(f"Fetching album urls...")
-	# with open("slushwave-bandcamp-links copy.txt", "r", encoding="utf-8") as f:
-	# 	urls = [line.strip() for line in f if line.strip()]
-	urls = [
-		"https://giftsfromhome.bandcamp.com/",
-	]
+	with open("slushwave-bandcamp-links copy.txt", "r", encoding="utf-8") as f:
+		urls = [line.strip() for line in f if line.strip()]
+	# urls = [
+	# 	"https://giftsfromhome.bandcamp.com/",
+	# ]
 	album_scraper = AlbumScraper(s, sem=8, use_cache=True, skip_mode="historical")
 
 	for batch_num, batch_urls in enumerate(split_to_batches(urls, 8), start=1):
