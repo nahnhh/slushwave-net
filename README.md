@@ -4,6 +4,7 @@ This is a web of all releases on bandcamp tagged with slushwave coming from all 
 *(Explaining the project for future self)*
 
 ## The files
+* [parse_music_page.py] is the only file to run. Change line 686-690 to change the scope of artists to scrape.
 * [good_profiles.json](good_profiles.json) is derived from [firefox_profiles.py](firefox_profiles.py) (`FINGERPRINTS`) after testing all client identifiers to remove ones that raise Client Challenge.
 * [slushwave-bandcamp-link.txt](slushwave-bandcamp-link.txt): a list of all artists who has at least 1 release tagged with "slushwave" on Bandcamp. I decided to expand my search to include releases of adjacent genres: ["slush", "nature", "ambient", "dreamtone", "signal", "transmission", "mallsoft"] (since slushwave or not, the album page soup has already been fetched to memory, I didn't want it to go to waste).
 * Data files generated after running AlbumScraper:
